@@ -4,12 +4,73 @@ All notable changes to SilkTrader v3 will be documented here.
 
 ## [Unreleased]
 
-### Tier 0: Exchange Integration (v0.3.0) - In Planning
-- Robust balance and position synchronization
-- Order status and lifecycle management
-- Pre-trade validation system
-- Error recovery and retry logic
-- Exchange manager abstraction layer
+### Tier 0: Exchange Integration (v0.3.0) - In Progress
+- [ ] Exchange manager abstraction layer (`lib/exchange_manager.py`)
+- [ ] Pre-trade validation system integration
+- [ ] Position synchronization with exchange
+- [ ] Advanced order types support
+- [x] Robust balance and position synchronization
+- [x] Order status and lifecycle management  
+- [x] Error recovery and retry logic
+
+## [0.2.1] - 2026-02-09
+
+### Fixed - Pionex API Authentication & Endpoints
+- **CRITICAL**: Fixed `INVALID_TIMESTAMP` error in authenticated requests
+  - Timestamp now correctly added to query parameters
+  - Query parameters properly sorted for signature generation
+  - Signature format matches Pionex spec: `METHOD+PATH+?+SORTED_QUERY+BODY`
+- **Balance Fields**: Changed `locked` → `frozen` to match Pionex API response format
+- **Trade History Endpoint**: Corrected `/api/v1/trade/myTrades` → `/api/v1/trade/fills`
+- **Removed Non-Existent Endpoint**: Deleted `get_account_info()` method (404 in Pionex API)
+
+### Added - Enhanced API Methods
+- **Order Lifecycle Management**:
+  - `get_order_status(symbol, order_id)` - Query specific order details
+  - `get_order_history(symbol, limit, start_time, end_time)` - Historical orders
+  - `get_trade_history(symbol, limit, start_time, end_time)` - Actual fills/executions
+  - `wait_for_order_fill(symbol, order_id, timeout)` - Poll until filled/failed
+  - `cancel_all_orders(symbol)` - Emergency order cancellation
+  
+- **Balance Management**:
+  - `get_balance_by_currency(currency)` - Returns tuple of (free, frozen, total)
+  - Enhanced `get_account_balance()` with better error handling
+  
+- **Helper Methods**:
+  - `is_symbol_tradeable(symbol)` - Pre-trade validation check
+  - Enhanced logging throughout all methods
+
+- **Reliability Features**:
+  - Retry logic with exponential backoff (max 3 attempts)
+  - Rate limiting enforcement (50ms between requests)
+  - Comprehensive error handling for network issues
+  - Detailed logging at INFO/WARNING/ERROR levels
+
+### Added - Testing Infrastructure
+- Created `tests/test_pionex_api.py` with 12 comprehensive test cases
+- Tests cover: symbols, klines, tickers, balances, orders, trade history, rate limiting, error handling
+- Real API integration testing (validated with $29.04 USDT balance)
+- All critical paths tested and passing
+
+### Changed - Code Quality
+- Added type hints: `Tuple[float, float, float]` for balance methods
+- Improved docstrings with detailed Args/Returns sections
+- Consistent error response format across all methods
+- Better separation of concerns (rate limiting, signature generation)
+
+### Technical Details
+- Enhanced `lib/pionex_api.py`: ~400 lines of improved code
+- Test suite: `tests/test_pionex_api.py`: 259 lines
+- Authentication now 100% compliant with Pionex API specification
+- Based on official docs: https://pionex-doc.gitbook.io/apidocs/
+
+### Verified Working
+✅ Market data retrieval (symbols, klines, tickers)
+✅ Account balance fetching (all currencies + specific currency)
+✅ Order management (place, status, history, cancel)
+✅ Trade history (fills/executions)
+✅ Rate limiting and retry logic
+✅ Error handling and graceful degradation
 
 ## [0.2.0] - 2026-02-09
 
@@ -80,4 +141,4 @@ All notable changes to SilkTrader v3 will be documented here.
 - **Minor** (0.X.0): New features, significant improvements
 - **Patch** (0.0.X): Bug fixes, minor improvements
 
-Current: v0.2.0 → Next: v0.3.0 (Exchange Integration)
+Current: v0.2.1 → Next: v0.3.0 (Exchange Integration Complete)
