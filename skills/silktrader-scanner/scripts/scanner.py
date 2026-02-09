@@ -50,16 +50,11 @@ class MarketScanner:
             List of symbol names (e.g., ['BTC_USDT', 'ETH_USDT', ...])
         """
         try:
-            symbols = self.api.get_symbols()
+            # API returns List[str] of enabled USDT pairs (already filtered)
+            symbols = self.api.get_symbols(quote='USDT')
             
-            # Filter for USDT pairs that are enabled
-            usdt_pairs = [
-                s['symbol'] for s in symbols 
-                if s['symbol'].endswith('_USDT') and s.get('enable', True)
-            ]
-            
-            self.logger.info(f"Found {len(usdt_pairs)} tradeable USDT pairs")
-            return sorted(usdt_pairs)
+            self.logger.info(f"Found {len(symbols)} tradeable USDT pairs")
+            return sorted(symbols)
             
         except Exception as e:
             self.logger.error(f"Failed to get USDT pairs: {e}")
@@ -187,7 +182,7 @@ class MarketScanner:
         for i, pair in enumerate(pairs, 1):
             try:
                 # Fetch klines
-                klines = self.fetch_klines(pair, interval='1h', limit=100)
+                klines = self.fetch_klines(pair, interval='15M', limit=100)
                 
                 if len(klines) < 50:
                     # Not enough data
@@ -277,9 +272,9 @@ class MarketScanner:
                 "WEAK BULL" if ind['price'] > ind['ema_fast'] else "BEARISH"
         
         return f"""
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+────────────────────────────────────────────────────────────────
 {opp['pair']} - Score: {opp['score']}/100 ({trend})
-━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+────────────────────────────────────────────────────────────────
 Entry Price: ${ind['price']:.6f}
 EMA Fast/Slow: ${ind['ema_fast']:.6f} / ${ind['ema_slow']:.6f}
 RSI: {ind['rsi']:.1f} (prev: {ind['rsi_prev']:.1f})

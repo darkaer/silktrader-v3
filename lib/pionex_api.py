@@ -232,7 +232,7 @@ class PionexAPI:
     def get_klines(self, symbol: str, interval: str = '15M', limit: int = 100) -> List[Dict]:
         params = {
             'symbol': symbol,
-            'interval': interval.upper(),
+            'interval': interval,
             'limit': limit
         }
         result = self._request('GET', '/api/v1/market/klines', params=params)
