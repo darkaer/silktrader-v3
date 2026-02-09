@@ -7,10 +7,11 @@ from unittest.mock import Mock, MagicMock, patch
 
 # Add parent directory to path
 sys.path.insert(0, '.')
+sys.path.append('skills/silktrader-trader/scripts')
 
 from lib.exchange_manager import ExchangeManager
 from lib.pionex_api import PionexAPI
-from skills.silktrader-trader.scripts.risk_manager import RiskManager
+from risk_manager import RiskManager
 
 
 def create_mock_api(balance=29.04):
