@@ -1,8 +1,31 @@
-# 🚀 SilkTrader v3
+<p align="center">
+  <img src="assets/logos/silktrader_logo.png" alt="SilkTrader v3 Logo" width="600"/>
+</p>
+
+<h1 align="center">SilkTrader v3</h1>
+
+<p align="center">
+  <strong>AI-Powered Autonomous Cryptocurrency Trading System</strong><br>
+  by <a href="https://github.com/FlipperArmada">FlipperArmada</a> | Created by <a href="https://github.com/Darkaer">Darkaer</a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/license-MIT-blue.svg" alt="License"/>
+  <img src="https://img.shields.io/badge/python-3.12%2B-blue" alt="Python"/>
+  <img src="https://img.shields.io/badge/status-beta-yellow" alt="Status"/>
+</p>
+
+---
+
+## 🐧 About
+
+SilkTrader v3 is an advanced, LLM-driven trading bot that autonomously scans crypto markets, analyzes opportunities using technical indicators, makes intelligent trading decisions, and executes trades with institutional-grade risk management.
+
+Developed by **Darkaer** for the **FlipperArmada** community.
+
 
 **AI-Powered Autonomous Cryptocurrency Trading System**
 
-SilkTrader v3 is an advanced, LLM-driven trading bot that autonomously scans crypto markets, analyzes opportunities using technical indicators, makes intelligent trading decisions, and executes trades with institutional-grade risk management.
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.12%2B-blue)
