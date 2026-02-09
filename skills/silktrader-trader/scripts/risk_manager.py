@@ -37,9 +37,97 @@ class RiskManager:
             'AVAX_USDT': 0.1
         })
     
+    def calculate_position_size_tiered(self, account_balance: float, entry_price: float, 
+                                       confidence_score: float = 70.0, pair: str = '') -> Tuple[float, float, str]:
+        """Calculate position size using tiered percentage method (optimal for small accounts)
+        
+        This method scales position size based on account size and setup quality:
+        - Small accounts (<$50): 20% base allocation
+        - Medium accounts ($50-$200): 15% base allocation
+        - Large accounts ($200-$1000): 10% base allocation
+        - Very large accounts (>$1000): 5% base allocation
+        
+        Position size is then adjusted by confidence score (0.5x to 1.5x multiplier).
+        
+        Args:
+            account_balance: Current USDT balance
+            entry_price: Planned entry price
+            confidence_score: Setup quality score 0-100 (default: 70)
+            pair: Trading pair for minimum size validation
+            
+        Returns:
+            (position_usdt, quantity, message): Position size, quantity, and formatted message
+            
+        Raises:
+            ValueError: If inputs are invalid
+        """
+        
+        # Input validation
+        if account_balance <= 0:
+            raise ValueError(f"Account balance must be positive, got {account_balance}")
+        if entry_price <= 0:
+            raise ValueError(f"Entry price must be positive, got {entry_price}")
+        if not 0 <= confidence_score <= 100:
+            raise ValueError(f"Confidence score must be 0-100, got {confidence_score}")
+        
+        # Determine base allocation percentage by account tier
+        if account_balance < 50:
+            base_percent = 20.0  # Aggressive for micro accounts
+            tier = "Small"
+        elif account_balance < 200:
+            base_percent = 15.0
+            tier = "Medium"
+        elif account_balance < 1000:
+            base_percent = 10.0
+            tier = "Large"
+        else:
+            base_percent = 5.0  # Conservative for larger accounts
+            tier = "Very Large"
+        
+        # Adjust based on confidence (0.5x to 1.5x multiplier)
+        confidence_multiplier = 0.5 + (confidence_score / 100.0)
+        
+        # Calculate raw position size
+        raw_position_usdt = account_balance * (base_percent / 100.0) * confidence_multiplier
+        
+        # Apply hard limits
+        min_position = 5.0  # Practical minimum
+        max_position = account_balance * 0.25  # Never more than 25% per trade
+        
+        position_usdt = max(min_position, min(raw_position_usdt, max_position))
+        
+        # Calculate quantity
+        quantity = position_usdt / entry_price
+        
+        # Check minimum order size if pair specified
+        if pair:
+            base_currency = pair.split('_')[0]
+            min_qty = self.min_order_sizes.get(pair, 0)
+            if min_qty > 0 and quantity < min_qty:
+                # Bump up to minimum quantity
+                quantity = min_qty
+                position_usdt = quantity * entry_price
+                self.logger.warning(
+                    f"Position adjusted to meet minimum order size: "
+                    f"{quantity:.6f} {base_currency} (${position_usdt:.2f})"
+                )
+        
+        # Format message
+        msg = (
+            f"{tier} Account: ${account_balance:.2f}, Base: {base_percent}%, "
+            f"Confidence: {confidence_score:.0f}% (×{confidence_multiplier:.2f}), "
+            f"Position: ${position_usdt:.2f} ({quantity:.8f})"
+        )
+        
+        self.logger.info(f"Tiered position sizing: {msg}")
+        return position_usdt, quantity, msg
+    
     def calculate_position_size(self, pair: str, entry_price: float, stop_loss_price: float, 
                                account_balance: float) -> Tuple[float, str]:
-        """Calculate position size based on ATR and risk limits
+        """Calculate position size based on ATR and risk limits (legacy method)
+        
+        NOTE: This method is retained for backward compatibility.
+        Use calculate_position_size_tiered() for new implementations.
         
         Args:
             pair: Trading pair (e.g., 'BTC_USDT')
@@ -78,7 +166,7 @@ class RiskManager:
         max_position_usdt = risk_amount / (price_risk / entry_price)
         
         # Apply position size limit from config
-        max_allowed = self.limits['max_position_size_usdt']
+        max_allowed = self.limits.get('max_position_size_usdt', 500.0)
         
         # Don't risk more than 5% of account on single position
         max_account_pct = account_balance * 0.05
@@ -130,22 +218,23 @@ class RiskManager:
             self.logger.warning(f"Trade rejected - Daily limits: {daily_msg}")
             return False, daily_msg
         
-        # Check minimum position size
-        min_position = self.limits.get('min_position_size_usdt', 10.0)
+        # Check minimum position size (use practical minimum for small accounts)
+        min_position = max(5.0, self.limits.get('min_position_size_usdt', 10.0))
         if position_usdt < min_position:
             msg = f"Position ${position_usdt:.2f} below minimum ${min_position}"
             self.logger.warning(f"Trade rejected: {msg}")
             return False, msg
         
         # Check max position size (allow small rounding tolerance)
-        if position_usdt > self.limits['max_position_size_usdt'] * 1.01:
-            msg = f"Position ${position_usdt:.2f} exceeds max ${self.limits['max_position_size_usdt']}"
+        max_config = self.limits.get('max_position_size_usdt', 500.0)
+        if position_usdt > max_config * 1.01:
+            msg = f"Position ${position_usdt:.2f} exceeds max ${max_config}"
             self.logger.warning(f"Trade rejected: {msg}")
             return False, msg
         
-        # Check account percentage limit (5% max per position)
-        if position_usdt > account_balance * 0.05:
-            msg = f"Position ${position_usdt:.2f} exceeds 5% of account ${account_balance:.2f}"
+        # Check account percentage limit (25% max per position for tiered method)
+        if position_usdt > account_balance * 0.25:
+            msg = f"Position ${position_usdt:.2f} exceeds 25% of account ${account_balance:.2f}"
             self.logger.warning(f"Trade rejected: {msg}")
             return False, msg
         
@@ -299,30 +388,34 @@ class RiskManager:
             return False, f"Daily trade limit reached ({trades_today}/{self.limits['max_daily_trades']})"
         
         # Check daily loss limit
-        if pnl_today < -self.limits['max_daily_loss_usdt']:
-            return False, f"Daily loss limit hit (${abs(pnl_today):.2f}/${self.limits['max_daily_loss_usdt']})"
+        max_loss = self.limits.get('max_daily_loss_usdt', 100.0)
+        if pnl_today < -max_loss:
+            return False, f"Daily loss limit hit (${abs(pnl_today):.2f}/${max_loss})"
         
         return True, f"Daily limits OK ({trades_today}/{self.limits['max_daily_trades']} trades, ${pnl_today:.2f} P&L)"
     
     def get_risk_summary(self) -> str:
         """Get formatted risk limits summary"""
         risk_pct = self.limits.get('risk_per_trade_percent', 2.0)
-        min_pos = self.limits.get('min_position_size_usdt', 10.0)
+        min_pos = max(5.0, self.limits.get('min_position_size_usdt', 10.0))
         atr_stop = self.limits.get('atr_stop_multiplier', 2.0)
         atr_tp = self.limits.get('atr_tp_multiplier', 3.0)
         
         return f"""
 Risk Management Limits:
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
-• Risk Per Trade:         {risk_pct}%
+• Position Sizing:        Tiered % (20% → 5%)
+• Risk Per Trade:         {risk_pct}% (legacy)
 • Min Position Size:      ${min_pos}
-• Max Position Size:      ${self.limits['max_position_size_usdt']}
+• Max Position Size:      ${self.limits.get('max_position_size_usdt', 500.0)}
+• Max Per Position:       25% of account
 • Max Open Positions:     {self.limits['max_open_positions']}
-• Max Daily Loss:         ${self.limits['max_daily_loss_usdt']}
+• Max Daily Loss:         ${self.limits.get('max_daily_loss_usdt', 100.0)}
 • Max Daily Trades:       {self.limits['max_daily_trades']}
 • ATR Stop Multiplier:    {atr_stop}x
 • ATR TP Multiplier:      {atr_tp}x
 • Trailing Activation:    {self.limits['trailing_stop_activation_percent']}%
 • Trailing Distance:      {self.limits['trailing_stop_distance_percent']}%
 ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+NOTE: Future upgrade to Kelly Criterion planned for v0.4.0+
         """
