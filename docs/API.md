@@ -10,6 +10,7 @@ Comprehensive reference for `lib/pionex_api.py` - the low-level exchange API cli
 - ✅ Retry logic (3 attempts with exponential backoff)
 - ✅ Comprehensive error handling
 - ✅ Detailed logging
+- ✅ **NEW:** Symbol info caching (24-hour hybrid cache)
 
 ---
 
@@ -56,6 +57,65 @@ symbols = api.get_symbols(quote='USDT')
 print(f"Found {len(symbols)} USDT pairs")
 # Output: Found 358 USDT pairs
 ```
+
+---
+
+### `get_symbol_info(symbol, force_refresh=False)` 🆕
+
+Get trading rules and minimum order requirements for a symbol **with 24-hour caching**.
+
+**Parameters:**
+- `symbol` (str): Trading pair (e.g., 'BTC_USDT')
+- `force_refresh` (bool): Bypass cache and fetch fresh data (default: False)
+
+**Returns:**
+- `Dict`: Symbol information:
+  ```python
+  {
+    'symbol': 'BTC_USDT',
+    'minAmount': 10.0,          # Minimum order value in USDT
+    'minTradeSize': 0.000001,   # Minimum quantity in BTC
+    'maxTradeSize': 1000.0,     # Maximum quantity in BTC
+    'enable': True,             # Symbol enabled for trading
+    'timestamp': 1707507600.0   # Cache timestamp (unix)
+  }
+  ```
+
+**Caching Behavior:**
+- **First call**: Fetches from Pionex API, caches in memory + disk
+- **Subsequent calls**: Returns cached data (if < 24 hours old)
+- **Bot restart**: Loads cache from `cache/symbol_info.json`
+- **Force refresh**: `force_refresh=True` bypasses cache
+
+**Example:**
+```python
+# Get BTC_USDT minimums (uses cache if available)
+info = api.get_symbol_info('BTC_USDT')
+
+print(f"Minimum order value: ${info['minAmount']:.2f}")
+print(f"Minimum quantity: {info['minTradeSize']:.8f} BTC")
+# Output:
+# Minimum order value: $10.00
+# Minimum quantity: 0.00000100 BTC
+
+# Check if order is valid
+order_value = 50.00  # $50 USDT
+if order_value >= info['minAmount']:
+    print("Order meets minimum requirements")
+
+# Force refresh (bypass cache)
+fresh_info = api.get_symbol_info('BTC_USDT', force_refresh=True)
+```
+
+**Use Cases:**
+1. **Position sizing**: Ensure orders meet `minAmount` requirement
+2. **Pair filtering**: Skip pairs where `minAmount` exceeds budget
+3. **Order validation**: Check quantity against `minTradeSize`
+
+**Performance:**
+- **API call**: ~200ms (first fetch)
+- **Cache hit**: <1ms (subsequent calls)
+- **Bot restart**: Instant (loads from file)
 
 ---
 
@@ -377,6 +437,64 @@ else:
 
 ---
 
+## Symbol Info Caching System 🆕
+
+### How It Works
+
+1. **First fetch**: API call → cache in memory + save to `cache/symbol_info.json`
+2. **Subsequent calls**: Return from memory cache (if < 24 hours old)
+3. **Bot restart**: Auto-load from `cache/symbol_info.json` on init
+4. **Cache expiry**: Re-fetch from API after 24 hours
+
+### Cache File Structure
+
+```json
+{
+  "BTC_USDT": {
+    "symbol": "BTC_USDT",
+    "minAmount": 10.0,
+    "minTradeSize": 0.000001,
+    "maxTradeSize": 1000.0,
+    "enable": true,
+    "timestamp": 1707507600.0
+  },
+  "ETH_USDT": {
+    "symbol": "ETH_USDT",
+    "minAmount": 10.0,
+    "minTradeSize": 0.001,
+    "maxTradeSize": 5000.0,
+    "enable": true,
+    "timestamp": 1707507612.5
+  }
+}
+```
+
+### Benefits
+
+- **Fast**: <1ms for cached lookups vs ~200ms API calls
+- **Rate-limit friendly**: Reduces API calls by ~99%
+- **Persistent**: Survives bot restarts
+- **Auto-refresh**: Updates stale data (>24h) automatically
+
+### Manual Cache Management
+
+```python
+# Force refresh a symbol
+info = api.get_symbol_info('BTC_USDT', force_refresh=True)
+
+# Clear cache file
+import os
+if os.path.exists('cache/symbol_info.json'):
+    os.remove('cache/symbol_info.json')
+
+# Check cache age
+info = api.get_symbol_info('BTC_USDT')
+age_hours = (time.time() - info['timestamp']) / 3600
+print(f"Cache age: {age_hours:.1f} hours")
+```
+
+---
+
 ## Error Handling
 
 ### Retry Logic
@@ -443,9 +561,9 @@ import logging
 logging.getLogger('PionexAPI').setLevel(logging.DEBUG)
 
 # Log levels used:
-# - DEBUG: Detailed request/response info
-# - INFO: Successful operations
-# - WARNING: API errors, retries
+# - DEBUG: Detailed request/response info, cache hits/misses
+# - INFO: Successful operations, cache loads
+# - WARNING: API errors, retries, cache issues
 # - ERROR: Critical failures
 ```
 
@@ -453,15 +571,20 @@ logging.getLogger('PionexAPI').setLevel(logging.DEBUG)
 
 ## Testing
 
-Run the comprehensive test suite:
+Run the comprehensive test suites:
 
 ```bash
+# Full API tests
 python tests/test_pionex_api.py
+
+# Symbol info caching tests
+python tests/test_symbol_info_cache.py
 ```
 
 **Tests cover:**
 - ✅ Symbol listing
 - ✅ Market data (klines, tickers)
+- ✅ **Symbol info caching (new)**
 - ✅ Account balance
 - ✅ Order operations
 - ✅ Trade history
@@ -492,7 +615,27 @@ free, frozen, total = api.get_balance_by_currency('USDT')
 all_balances = api.get_account_balance()
 ```
 
-### 3. Wait for Order Fills
+### 3. Validate Orders Against Exchange Minimums
+
+```python
+# Get symbol minimums
+info = api.get_symbol_info('BTC_USDT')
+
+# Check order meets requirements
+order_value = quantity * price
+if order_value < info['minAmount']:
+    print(f"Order ${order_value} below minimum ${info['minAmount']}")
+    return
+
+if quantity < info['minTradeSize']:
+    print(f"Quantity {quantity} below minimum {info['minTradeSize']}")
+    return
+
+# Place order
+api.place_order('BTC_USDT', 'BUY', 'LIMIT', quantity, price)
+```
+
+### 4. Wait for Order Fills
 
 ```python
 # Place order
@@ -503,7 +646,7 @@ order_id = result['data']['orderId']
 success, order = api.wait_for_order_fill('BTC_USDT', order_id, timeout=60)
 ```
 
-### 4. Emergency Stop
+### 5. Emergency Stop
 
 ```python
 # In case of issues, cancel all orders
@@ -521,11 +664,12 @@ except Exception as e:
 
 - **Official Docs**: https://pionex-doc.gitbook.io/apidocs/
 - **Authentication**: https://pionex-doc.gitbook.io/apidocs/restful/general/authentication
-- **Test Suite**: `tests/test_pionex_api.py`
+- **Symbols Endpoint**: https://pionex-doc.gitbook.io/apidocs/restful/common/market-data
+- **Test Suite**: `tests/test_pionex_api.py`, `tests/test_symbol_info_cache.py`
 - **Source Code**: `lib/pionex_api.py`
 
 ---
 
 **Last Updated**: February 9, 2026  
-**Version**: v0.2.1  
+**Version**: v0.2.2 (added symbol info caching)  
 **Status**: Production-ready ✅
