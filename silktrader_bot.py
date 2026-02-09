@@ -97,6 +97,19 @@ class SilkTraderBot:
         self.positions = positions
         self.log(f"Position saved: {position['pair']} - {position['quantity']:.4f} @ ${position['entry']:.6f}")
     
+    def get_account_balance(self):
+        """Get current account balance"""
+        if self.dry_run:
+            return 1000.0  # Mock $1000 account for dry run
+        
+        try:
+            balances = self.api.get_account_balance()
+            usdt_balance = next((b for b in balances if b['coin'] == 'USDT'), None)
+            return float(usdt_balance['free']) if usdt_balance else 1000.0
+        except Exception as e:
+            self.log(f"Error fetching account balance: {e}")
+            return 1000.0
+    
     def scan_and_analyze(self):
         """Scan market and analyze top opportunities"""
         print(f"🔍 [{datetime.now().strftime('%H:%M:%S')}] Scanning market...")
@@ -183,16 +196,8 @@ class SilkTraderBot:
     def execute_trade(self, pair, indicators, decision):
         """Execute approved trade"""
         
-        # Check daily limits
-        can_trade, limit_msg = self.risk_mgr.check_daily_limits(
-            self.trades_today, 
-            self.daily_pnl
-        )
-        
-        if not can_trade:
-            print(f"   ⚠️ {limit_msg}\n")
-            self.log(f"Trade blocked for {pair}: {limit_msg}")
-            return False
+        # Get current account balance
+        account_balance = self.get_account_balance()
         
         # Calculate entry, stops, position size
         entry_price = indicators['price']
@@ -200,26 +205,22 @@ class SilkTraderBot:
         stop_loss = self.risk_mgr.calculate_stop_loss(entry_price, atr, 'BUY')
         take_profit = self.risk_mgr.calculate_take_profit(entry_price, atr, 'BUY')
         
-        # Get account balance (mock for dry run, real API call for live)
-        if self.dry_run:
-            account_balance = 1000.0  # Mock $1000 account
-        else:
-            try:
-                balances = self.api.get_account_balance()
-                usdt_balance = next((b for b in balances if b['coin'] == 'USDT'), None)
-                account_balance = float(usdt_balance['free']) if usdt_balance else 1000.0
-            except:
-                account_balance = 1000.0
-        
         quantity, pos_msg = self.risk_mgr.calculate_position_size(
             pair, entry_price, stop_loss, account_balance
         )
         
         position_usdt = quantity * entry_price
         
-        # Validate trade
+        # Validate trade with ALL required parameters
         approved, val_msg = self.risk_mgr.validate_trade(
-            pair, 'BUY', position_usdt, len(self.positions), self.daily_pnl
+            pair=pair,
+            side='BUY',
+            quantity=quantity,
+            position_usdt=position_usdt,
+            current_positions=len(self.positions),
+            daily_pnl=self.daily_pnl,
+            trades_today=self.trades_today,
+            account_balance=account_balance
         )
         
         if not approved:
@@ -229,7 +230,7 @@ class SilkTraderBot:
         
         # Execute
         if self.dry_run:
-            print(f"   🔔 DRY RUN: Would BUY {quantity:.4f} {pair} @ ${entry_price:.6f}")
+            print(f"   🔔 DRY RUN: Would BUY {quantity:.6f} {pair} @ ${entry_price:.6f}")
             print(f"      SL: ${stop_loss:.6f} | TP: ${take_profit:.6f}")
             
             # Save position for monitor
@@ -245,8 +246,8 @@ class SilkTraderBot:
             self.save_position(position)
             
         else:
-            print(f"   ⚡ EXECUTING: BUY {quantity:.4f} {pair}...")
-            self.log(f"Executing BUY order: {quantity:.4f} {pair} @ ${entry_price:.6f}")
+            print(f"   ⚡ EXECUTING: BUY {quantity:.6f} {pair}...")
+            self.log(f"Executing BUY order: {quantity:.6f} {pair} @ ${entry_price:.6f}")
             
             try:
                 order = self.api.place_order(pair, 'BUY', 'MARKET', quantity)
@@ -270,9 +271,6 @@ class SilkTraderBot:
                         'reasoning': decision['reasoning']
                     }
                     self.save_position(position)
-                    
-                    # TODO: Place stop loss and take profit orders
-                    # (Requires checking if Pionex supports OCO orders)
                     
                     self.trades_today += 1
                     
@@ -388,7 +386,7 @@ class SilkTraderBot:
         if self.positions:
             print(f"\nOpen Positions:")
             for pos in self.positions:
-                print(f"  • {pos['pair']}: {pos['quantity']:.4f} @ ${pos['entry']:.6f}")
+                print(f"  • {pos['pair']}: {pos['quantity']:.6f} @ ${pos['entry']:.6f}")
         
         print(f"{'='*70}\n")
         
