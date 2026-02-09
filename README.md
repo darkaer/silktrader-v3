@@ -87,6 +87,22 @@ SilkTrader v3 is an advanced, LLM-driven trading bot that autonomously scans cry
 
 ## 🚀 Quick Start
 
+## 📚 Documentation
+
+- [Installation Guide](docs/INSTALLATION.md) - Detailed setup instructions
+- [Configuration Guide](docs/CONFIGURATION.md) - All configuration options
+- [Examples](examples/) - Usage examples and scripts
+- [API Reference](docs/API_REFERENCE.md) - Core library documentation
+
+## 🧪 Testing
+
+# Run all tests
+python -m pytest tests/
+
+# Test specific component
+python tests/test_foundation.py
+python tests/test_llm.py
+
 ### Prerequisites
 
 - Python 3.12+ (3.13 recommended)
