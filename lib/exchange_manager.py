@@ -3,11 +3,16 @@
 ExchangeManager: High-level trading interface for SilkTrader v3
 Combines PionexAPI + RiskManager for validated order execution
 """
+import sys
 import logging
 import time
 from typing import Dict, List, Optional, Tuple
+
+# Add skills path for RiskManager import
+sys.path.append('skills/silktrader-trader/scripts')
+
 from lib.pionex_api import PionexAPI
-from skills.silktrader-trader.scripts.risk_manager import RiskManager
+from risk_manager import RiskManager
 
 
 class ExchangeManager:
