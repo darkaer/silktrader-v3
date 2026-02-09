@@ -6,7 +6,7 @@
 
 <p align="center">
   <strong>AI-Powered Autonomous Cryptocurrency Trading System</strong><br>
-  by <a href="https://github.com/FlipperArmada">FlipperArmada</a> | Created by <a href="https://github.com/Darkaer">Darkaer</a>
+  for FlipperArmada | Created by <a href="https://github.com/Darkaer">Darkaer</a>
 </p>
 
 <p align="center">
