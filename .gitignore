@@ -1,0 +1,3 @@
+echo "credentials/pionex.json" >> .gitignore
+echo "logs/" >> .gitignore
+echo "data/" >> .gitignore

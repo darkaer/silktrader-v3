@@ -1,0 +1,348 @@
+#!/usr/bin/env python3
+"""
+SilkTrader v3 - Position Monitor
+Continuously monitors open positions and manages exits
+"""
+import sys
+import os
+import time
+import json
+from datetime import datetime
+
+sys.path.append('lib')
+sys.path.append('skills/silktrader-trader/scripts')
+
+from pionex_api import PionexAPI
+from indicators import calc_all_indicators
+from risk_manager import RiskManager
+
+class PositionMonitor:
+    """Monitor and manage open trading positions"""
+    
+    def __init__(self, config_path='credentials/pionex.json', dry_run=True):
+        self.api = PionexAPI(config_path)
+        self.risk_mgr = RiskManager(config_path)
+        self.dry_run = dry_run
+        
+        # Load positions from file or API
+        self.positions_file = 'data/positions.json'
+        self.positions = self.load_positions()
+        
+        # Statistics
+        self.total_pnl = 0.0
+        self.wins = 0
+        self.losses = 0
+        self.closed_today = []
+        
+        print(f"\n{'='*70}")
+        print(f"📊 SilkTrader v3 - Position Monitor")
+        print(f"{'='*70}")
+        print(f"Mode: {'DRY RUN' if dry_run else '🔴 LIVE TRADING'}")
+        print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"Open Positions: {len(self.positions)}")
+        print(f"{'='*70}\n")
+    
+    def load_positions(self):
+        """Load positions from file"""
+        if not os.path.exists(self.positions_file):
+            return []
+        
+        try:
+            with open(self.positions_file, 'r') as f:
+                return json.load(f)
+        except:
+            return []
+    
+    def save_positions(self):
+        """Save positions to file"""
+        os.makedirs('data', exist_ok=True)
+        with open(self.positions_file, 'w') as f:
+            json.dump(self.positions, f, indent=2)
+    
+    def add_position(self, position):
+        """Add new position to monitor"""
+        position['opened_at'] = datetime.now().isoformat()
+        position['id'] = f"{position['pair']}_{int(time.time())}"
+        self.positions.append(position)
+        self.save_positions()
+        print(f"✅ Added position: {position['pair']}")
+    
+    def get_current_price(self, pair):
+        """Get current market price"""
+        try:
+            klines = self.api.get_klines(pair, '1M', 1)
+            if klines:
+                return klines[0]['close']
+        except:
+            pass
+        return None
+    
+    def check_position(self, position):
+        """Check single position for exit conditions"""
+        pair = position['pair']
+        entry = position['entry']
+        quantity = position['quantity']
+        stop_loss = position['stop_loss']
+        take_profit = position['take_profit']
+        
+        # Get current price
+        current_price = self.get_current_price(pair)
+        
+        if current_price is None:
+            print(f"⚠️  {pair}: Unable to get current price")
+            return None
+        
+        # Calculate P&L
+        pnl_pct = ((current_price - entry) / entry) * 100
+        pnl_usdt = (current_price - entry) * quantity
+        position_value = current_price * quantity
+        
+        # Check trailing stop
+        trailing_active = position.get('trailing_active', False)
+        trailing_stop = position.get('trailing_stop', stop_loss)
+        
+        if not trailing_active:
+            # Check if should activate trailing stop
+            should_activate, new_stop = self.risk_mgr.calculate_trailing_stop(
+                entry, current_price, (take_profit - entry) / 3, 'BUY'
+            )
+            
+            if should_activate:
+                trailing_active = True
+                trailing_stop = new_stop
+                position['trailing_active'] = True
+                position['trailing_stop'] = trailing_stop
+                print(f"   🎯 {pair}: Trailing stop ACTIVATED at ${trailing_stop:.6f}")
+        else:
+            # Update trailing stop if price moved up
+            should_update, new_stop = self.risk_mgr.calculate_trailing_stop(
+                entry, current_price, (take_profit - entry) / 3, 'BUY'
+            )
+            
+            if should_update and new_stop > trailing_stop:
+                trailing_stop = new_stop
+                position['trailing_stop'] = trailing_stop
+                print(f"   📈 {pair}: Trailing stop moved to ${trailing_stop:.6f}")
+        
+        # Status display
+        status = "🟢" if pnl_usdt > 0 else "🔴"
+        
+        print(f"{status} {pair}")
+        print(f"   Entry: ${entry:.6f} → Current: ${current_price:.6f}")
+        print(f"   P&L: {pnl_pct:+.2f}% (${pnl_usdt:+.2f})")
+        print(f"   Value: ${position_value:.2f}")
+        print(f"   Stop: ${trailing_stop:.6f} | Target: ${take_profit:.6f}")
+        
+        # Check exit conditions
+        exit_reason = None
+        exit_price = None
+        
+        # Stop loss hit
+        if current_price <= trailing_stop:
+            exit_reason = "STOP LOSS"
+            exit_price = trailing_stop
+            print(f"   🛑 STOP LOSS HIT at ${trailing_stop:.6f}")
+        
+        # Take profit hit
+        elif current_price >= take_profit:
+            exit_reason = "TAKE PROFIT"
+            exit_price = take_profit
+            print(f"   💰 TAKE PROFIT HIT at ${take_profit:.6f}")
+        
+        # Return exit signal if needed
+        if exit_reason:
+            return {
+                'position': position,
+                'reason': exit_reason,
+                'exit_price': exit_price,
+                'pnl_usdt': pnl_usdt,
+                'pnl_pct': pnl_pct
+            }
+        
+        print()  # Blank line between positions
+        return None
+    
+    def close_position(self, exit_signal):
+        """Close a position"""
+        position = exit_signal['position']
+        pair = position['pair']
+        quantity = position['quantity']
+        reason = exit_signal['reason']
+        exit_price = exit_signal['exit_price']
+        pnl_usdt = exit_signal['pnl_usdt']
+        pnl_pct = exit_signal['pnl_pct']
+        
+        print(f"\n{'='*70}")
+        print(f"🚪 CLOSING POSITION: {pair}")
+        print(f"{'='*70}")
+        print(f"Reason: {reason}")
+        print(f"Entry: ${position['entry']:.6f}")
+        print(f"Exit: ${exit_price:.6f}")
+        print(f"Quantity: {quantity:.4f}")
+        print(f"P&L: {pnl_pct:+.2f}% (${pnl_usdt:+.2f})")
+        print(f"{'='*70}\n")
+        
+        if not self.dry_run:
+            try:
+                # Execute sell order
+                print(f"⚡ Executing SELL order...")
+                order = self.api.place_order(pair, 'SELL', 'MARKET', quantity)
+                
+                if 'error' not in order:
+                    print(f"✅ Position closed successfully!")
+                else:
+                    print(f"❌ Failed to close: {order['error']}")
+                    return False
+            except Exception as e:
+                print(f"❌ Error closing position: {e}")
+                return False
+        else:
+            print(f"🔔 DRY RUN: Would SELL {quantity:.4f} {pair} @ ${exit_price:.6f}")
+        
+        # Update statistics
+        self.total_pnl += pnl_usdt
+        if pnl_usdt > 0:
+            self.wins += 1
+        else:
+            self.losses += 1
+        
+        # Log closed trade
+        self.closed_today.append({
+            'pair': pair,
+            'entry': position['entry'],
+            'exit': exit_price,
+            'quantity': quantity,
+            'pnl_usdt': pnl_usdt,
+            'pnl_pct': pnl_pct,
+            'reason': reason,
+            'opened_at': position.get('opened_at'),
+            'closed_at': datetime.now().isoformat()
+        })
+        
+        # Remove from positions
+        self.positions = [p for p in self.positions if p['id'] != position['id']]
+        self.save_positions()
+        
+        return True
+    
+    def check_all_positions(self):
+        """Check all open positions"""
+        if not self.positions:
+            print("ℹ️  No open positions to monitor\n")
+            return
+        
+        print(f"📊 Checking {len(self.positions)} open position(s)...\n")
+        
+        exits_to_process = []
+        
+        for position in self.positions:
+            exit_signal = self.check_position(position)
+            if exit_signal:
+                exits_to_process.append(exit_signal)
+        
+        # Process exits
+        for exit_signal in exits_to_process:
+            self.close_position(exit_signal)
+        
+        # Save updated positions
+        self.save_positions()
+    
+    def print_summary(self):
+        """Print session summary"""
+        print(f"\n{'='*70}")
+        print(f"📈 SESSION SUMMARY")
+        print(f"{'='*70}")
+        print(f"Open Positions: {len(self.positions)}")
+        print(f"Closed Today: {len(self.closed_today)}")
+        
+        if self.closed_today:
+            print(f"\nClosed Trades:")
+            for trade in self.closed_today:
+                status = "✅" if trade['pnl_usdt'] > 0 else "❌"
+                print(f"  {status} {trade['pair']}: {trade['pnl_pct']:+.2f}% (${trade['pnl_usdt']:+.2f}) - {trade['reason']}")
+        
+        if self.wins + self.losses > 0:
+            win_rate = (self.wins / (self.wins + self.losses)) * 100
+            print(f"\nStatistics:")
+            print(f"  Win Rate: {win_rate:.1f}% ({self.wins}W / {self.losses}L)")
+            print(f"  Total P&L: ${self.total_pnl:+.2f}")
+            
+            if self.wins > 0 and self.losses > 0:
+                avg_win = sum(t['pnl_usdt'] for t in self.closed_today if t['pnl_usdt'] > 0) / self.wins
+                avg_loss = abs(sum(t['pnl_usdt'] for t in self.closed_today if t['pnl_usdt'] < 0) / self.losses)
+                profit_factor = avg_win / avg_loss if avg_loss > 0 else 0
+                print(f"  Avg Win: ${avg_win:.2f}")
+                print(f"  Avg Loss: ${avg_loss:.2f}")
+                print(f"  Profit Factor: {profit_factor:.2f}")
+        
+        print(f"{'='*70}\n")
+    
+    def run_once(self):
+        """Run single monitoring cycle"""
+        print(f"\n{'─'*70}")
+        print(f"🔄 Monitoring cycle at {datetime.now().strftime('%H:%M:%S')}")
+        print(f"{'─'*70}\n")
+        
+        self.check_all_positions()
+        
+        print(f"{'─'*70}")
+        print(f"✅ Monitoring cycle complete")
+        print(f"{'─'*70}\n")
+    
+    def run_continuous(self, interval_seconds=30):
+        """Run monitor continuously"""
+        print(f"🚀 Starting continuous monitoring (check every {interval_seconds}s)")
+        print(f"   Press Ctrl+C to stop\n")
+        
+        try:
+            while True:
+                self.run_once()
+                
+                # Wait for next check
+                if self.positions:  # Only show countdown if positions exist
+                    print(f"⏳ Next check in {interval_seconds}s...")
+                time.sleep(interval_seconds)
+                
+        except KeyboardInterrupt:
+            print(f"\n\n⚠️  Monitor stopped by user")
+            self.print_summary()
+
+def main():
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='SilkTrader v3 Position Monitor')
+    parser.add_argument('--live', action='store_true', help='Live trading mode')
+    parser.add_argument('--interval', type=int, default=30, help='Check interval in seconds')
+    parser.add_argument('--once', action='store_true', help='Run once and exit')
+    parser.add_argument('--add', type=str, help='Add position: PAIR,ENTRY,QUANTITY,SL,TP')
+    
+    args = parser.parse_args()
+    
+    monitor = PositionMonitor(dry_run=not args.live)
+    
+    # Add position manually if specified
+    if args.add:
+        try:
+            parts = args.add.split(',')
+            position = {
+                'pair': parts[0],
+                'entry': float(parts[1]),
+                'quantity': float(parts[2]),
+                'stop_loss': float(parts[3]),
+                'take_profit': float(parts[4])
+            }
+            monitor.add_position(position)
+            print(f"✅ Position added: {position['pair']}\n")
+        except Exception as e:
+            print(f"❌ Error adding position: {e}")
+            print("Format: PAIR,ENTRY,QUANTITY,STOP_LOSS,TAKE_PROFIT")
+            print("Example: BTC_USDT,50000,0.01,48500,52500")
+            return
+    
+    if args.once:
+        monitor.run_once()
+    else:
+        monitor.run_continuous(interval_seconds=args.interval)
+
+if __name__ == '__main__':
+    main()
