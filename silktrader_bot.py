@@ -315,14 +315,18 @@ class SilkTraderBot:
                 )
                 
                 # Send Telegram notification for new position
+                # Handle None values for paper trading
+                sl = result.get('stop_loss') or entry_price * 0.98  # Default -2%
+                tp = result.get('take_profit') or entry_price * 1.03  # Default +3%
+                
                 self.telegram.send_position_opened(
                     pair=pair,
                     side='BUY',
                     entry_price=entry_price,
                     quantity=result['quantity'],
                     position_usdt=result['position_usdt'],
-                    stop_loss=result.get('stop_loss', 0),
-                    take_profit=result.get('take_profit', 0)
+                    stop_loss=sl,
+                    take_profit=tp
                 )
                 
                 return True
