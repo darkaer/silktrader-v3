@@ -16,9 +16,14 @@ class PionexAPI:
         with open(credentials_path, 'r') as f:
             self.config = json.load(f)
         
-        self.api_key = self.config['PIONEX_API_KEY']
-        self.api_secret = self.config['PIONEX_API_SECRET']
-        self.base_url = self.config['base_url']
+        # Support both old and new field names for backward compatibility
+        self.api_key = self.config.get('api_key') or self.config.get('PIONEX_API_KEY')
+        self.api_secret = self.config.get('api_secret') or self.config.get('PIONEX_API_SECRET')
+        self.base_url = self.config.get('base_url', 'https://api.pionex.com')
+        
+        if not self.api_key or not self.api_secret:
+            raise ValueError("Missing API credentials: 'api_key' and 'api_secret' required in config")
+        
         self.session = requests.Session()
         
         # Setup logging
