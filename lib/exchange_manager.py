@@ -364,17 +364,20 @@ class ExchangeManager:
         Returns:
             Dict with account summary:
             {
-                'balance': float,
+                'available_balance': float,
                 'open_positions': int,
                 'max_positions': int,
-                'daily_trades': int,
+                'trades_today': int,
+                'max_daily_trades': int,
                 'daily_pnl': float,
-                'can_trade': bool
+                'can_trade': bool,
+                'limit_message': str
             }
         """
         balance = self.get_available_balance()
         open_positions = len(self.get_open_positions())
         max_positions = self.risk_manager.limits['max_open_positions']
+        max_daily_trades = self.risk_manager.limits['max_daily_trades']
         
         can_trade, limit_msg = self.risk_manager.check_daily_limits(
             self._trades_today, 
@@ -382,10 +385,11 @@ class ExchangeManager:
         )
         
         summary = {
-            'balance': balance,
+            'available_balance': balance,
             'open_positions': open_positions,
             'max_positions': max_positions,
-            'daily_trades': self._trades_today,
+            'trades_today': self._trades_today,
+            'max_daily_trades': max_daily_trades,
             'daily_pnl': self._daily_pnl,
             'can_trade': can_trade,
             'limit_message': limit_msg
@@ -475,9 +479,9 @@ if __name__ == '__main__':
         print("\n[TEST 4] Position Summary")
         print("-" * 80)
         summary = exchange_manager.get_position_summary()
-        print(f"Balance: ${summary['balance']:.2f}")
+        print(f"Balance: ${summary['available_balance']:.2f}")
         print(f"Open Positions: {summary['open_positions']}/{summary['max_positions']}")
-        print(f"Daily Trades: {summary['daily_trades']}")
+        print(f"Daily Trades: {summary['trades_today']}/{summary['max_daily_trades']}")
         print(f"Daily P&L: ${summary['daily_pnl']:.2f}")
         print(f"Can Trade: {summary['can_trade']} - {summary['limit_message']}")
         
