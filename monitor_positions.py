@@ -114,16 +114,19 @@ class PositionMonitor:
                 'trade_id': position.get('trade_id', position['id']),
                 'pair': position['pair'],
                 'current_price': current_price,
+                'entry_price': position['entry'],  # Added missing field
+                'quantity': position['quantity'],  # Added missing field
                 'unrealized_pnl': pnl_usdt,
                 'pnl_percent': pnl_pct,
+                'stop_loss': position.get('stop_loss'),  # Optional
+                'take_profit': position.get('take_profit'),  # Optional
                 'trailing_stop': trailing_stop,
-                'position_value': current_price * position['quantity'],
                 'snapshot_time': datetime.now().isoformat()
             }
             self.db.insert_position_snapshot(snapshot)
         except Exception as e:
-            # Don't fail monitoring if database logging fails
-            pass
+            # Show error for debugging but don't fail monitoring
+            print(f"   ⚠️  Snapshot logging failed: {e}")
     
     def check_position(self, position):
         """Check single position for exit conditions"""
