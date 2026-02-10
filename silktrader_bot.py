@@ -286,7 +286,10 @@ class SilkTraderBot:
                 print(f"   ✅ Trade Executed!")
                 print(f"      Order: {result['order_id']}")
                 print(f"      Position: ${result['position_usdt']:.2f} ({result['quantity']:.6f} {pair.split('_')[0]})")
-                print(f"      Stop Loss: ${result['stop_loss']:.6f} | Take Profit: ${result['take_profit']:.6f}")
+                
+                # Only show stop loss/take profit if they exist (may be None in paper trading)
+                if result.get('stop_loss') is not None and result.get('take_profit') is not None:
+                    print(f"      Stop Loss: ${result['stop_loss']:.6f} | Take Profit: ${result['take_profit']:.6f}")
                 
                 self.logger.info(
                     f"Trade executed: {pair} {result['order_id']} - "
