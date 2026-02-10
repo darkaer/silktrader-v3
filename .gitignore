@@ -1,3 +1,14 @@
 echo "credentials/pionex.json" >> .gitignore
 echo "logs/" >> .gitignore
 echo "data/" >> .gitignore
+
+# Python bytecode
+__pycache__/
+*.pyc
+*.pyo
+
+# Runtime data
+cache/
+data/
+logs/
+

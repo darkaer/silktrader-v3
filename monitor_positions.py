@@ -84,6 +84,7 @@ class PositionMonitor:
         quantity = position['quantity']
         stop_loss = position['stop_loss']
         take_profit = position['take_profit']
+        position_id = position['id']
         
         # Get current price
         current_price = self.get_current_price(pair)
@@ -97,14 +98,17 @@ class PositionMonitor:
         pnl_usdt = (current_price - entry) * quantity
         position_value = current_price * quantity
         
-        # Check trailing stop
+        # Check trailing stop with position_id
         trailing_active = position.get('trailing_active', False)
         trailing_stop = position.get('trailing_stop', stop_loss)
+        
+        # Calculate ATR from price range (simplified)
+        atr = (take_profit - entry) / 3  # Rough estimate
         
         if not trailing_active:
             # Check if should activate trailing stop
             should_activate, new_stop = self.risk_mgr.calculate_trailing_stop(
-                entry, current_price, (take_profit - entry) / 3, 'BUY'
+                position_id, entry, current_price, atr, 'BUY'
             )
             
             if should_activate:
@@ -116,7 +120,7 @@ class PositionMonitor:
         else:
             # Update trailing stop if price moved up
             should_update, new_stop = self.risk_mgr.calculate_trailing_stop(
-                entry, current_price, (take_profit - entry) / 3, 'BUY'
+                position_id, entry, current_price, atr, 'BUY'
             )
             
             if should_update and new_stop > trailing_stop:
@@ -171,6 +175,7 @@ class PositionMonitor:
         exit_price = exit_signal['exit_price']
         pnl_usdt = exit_signal['pnl_usdt']
         pnl_pct = exit_signal['pnl_pct']
+        position_id = position['id']
         
         print(f"\n{'='*70}")
         print(f"🚪 CLOSING POSITION: {pair}")
@@ -178,7 +183,7 @@ class PositionMonitor:
         print(f"Reason: {reason}")
         print(f"Entry: ${position['entry']:.6f}")
         print(f"Exit: ${exit_price:.6f}")
-        print(f"Quantity: {quantity:.4f}")
+        print(f"Quantity: {quantity:.6f}")
         print(f"P&L: {pnl_pct:+.2f}% (${pnl_usdt:+.2f})")
         print(f"{'='*70}\n")
         
@@ -197,7 +202,10 @@ class PositionMonitor:
                 print(f"❌ Error closing position: {e}")
                 return False
         else:
-            print(f"🔔 DRY RUN: Would SELL {quantity:.4f} {pair} @ ${exit_price:.6f}")
+            print(f"🔔 DRY RUN: Would SELL {quantity:.6f} {pair} @ ${exit_price:.6f}")
+        
+        # Clear position tracking in risk manager
+        self.risk_mgr.clear_position_tracking(position_id)
         
         # Update statistics
         self.total_pnl += pnl_usdt
@@ -220,7 +228,7 @@ class PositionMonitor:
         })
         
         # Remove from positions
-        self.positions = [p for p in self.positions if p['id'] != position['id']]
+        self.positions = [p for p in self.positions if p['id'] != position_id]
         self.save_positions()
         
         return True

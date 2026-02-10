@@ -6,14 +6,33 @@ import os
 class LLMDecisionEngine:
     """LLM-powered trading decision engine using OpenRouter"""
     
-    def __init__(self, api_key: str = None, model: str = "anthropic/claude-3.5-sonnet"):
+    def __init__(self, api_key: str = None, model: str = "arcee-ai/trinity-large-preview:free"):
+        """Initialize LLM decision engine
+        
+        Args:
+            api_key: OpenRouter API key (uses OPENROUTER_API_KEY env var if not provided)
+            model: Model identifier (default: arcee-ai/trinity-large-preview:free)
+        """
         self.api_key = api_key or os.getenv('OPENROUTER_API_KEY')
         self.model = model
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
         
     def analyze_opportunity(self, pair: str, indicators: dict, score: int) -> dict:
-        """Get LLM trading decision for a specific opportunity"""
+        """Get LLM trading decision for a specific opportunity
         
+        Args:
+            pair: Trading pair (e.g., 'BTC_USDT')
+            indicators: Dict of technical indicators
+            score: Setup quality score (0-7)
+            
+        Returns:
+            Dict with decision:
+            {
+                'action': 'BUY' | 'SELL' | 'WAIT',
+                'confidence': int (1-10),
+                'reasoning': str
+            }
+        """
         prompt = self._format_analysis_prompt(pair, indicators, score)
         
         try:
@@ -21,12 +40,19 @@ class LLMDecisionEngine:
             decision = self._parse_decision(response)
             return decision
         except Exception as e:
-            print(f"LLM Error: {e}")
             return {'action': 'WAIT', 'confidence': 0, 'reasoning': f'Error: {e}'}
     
     def _format_analysis_prompt(self, pair: str, indicators: dict, score: int) -> str:
-        """Format compact prompt for LLM"""
+        """Format compact prompt for LLM analysis
         
+        Args:
+            pair: Trading pair
+            indicators: Technical indicators dict
+            score: Setup quality score (0-7)
+            
+        Returns:
+            Formatted prompt string
+        """
         trend = "BULLISH" if indicators['price'] > indicators['ema_fast'] > indicators['ema_slow'] else "BEARISH"
         rsi_state = "overbought" if indicators['rsi'] > 70 else "oversold" if indicators['rsi'] < 30 else "neutral"
         
@@ -58,8 +84,17 @@ Consider:
         return prompt
     
     def _call_openrouter(self, prompt: str) -> str:
-        """Call OpenRouter API"""
+        """Call OpenRouter API
         
+        Args:
+            prompt: User prompt
+            
+        Returns:
+            Model response text
+            
+        Raises:
+            requests.HTTPError: If API call fails
+        """
         headers = {
             'Authorization': f'Bearer {self.api_key}',
             'Content-Type': 'application/json'
@@ -84,8 +119,14 @@ Consider:
         return result['choices'][0]['message']['content']
     
     def _parse_decision(self, response: str) -> dict:
-        """Parse LLM response into structured decision"""
+        """Parse LLM response into structured decision
         
+        Args:
+            response: Raw LLM response text
+            
+        Returns:
+            Dict with action, confidence, reasoning
+        """
         lines = response.strip().split('\n')
         decision = {
             'action': 'WAIT',
