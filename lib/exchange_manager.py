@@ -4,6 +4,8 @@ ExchangeManager: High-level trading interface for SilkTrader v3
 Combines PionexAPI + RiskManager for validated order execution
 """
 import sys
+import os
+import json
 import logging
 import time
 from datetime import datetime
@@ -47,12 +49,53 @@ class ExchangeManager:
         self._trades_today = 0
         self._daily_pnl = 0.0
         
+        # Paper trading positions file
+        self.positions_file = 'data/positions.json'
+        
         mode = "PAPER TRADING" if dry_run else "LIVE TRADING"
         self.logger.warning(f"ExchangeManager initialized in {mode} mode")
         
         # Extra safety warning if live trading
         if not dry_run:
             self.logger.critical("⚠️  LIVE TRADING MODE ENABLED - REAL MONEY AT RISK ⚠️")
+    
+    def _load_paper_positions(self) -> List[Dict]:
+        """Load paper trading positions from file
+        
+        Returns:
+            List of position dicts
+        """
+        if not os.path.exists(self.positions_file):
+            return []
+        
+        try:
+            with open(self.positions_file, 'r') as f:
+                return json.load(f)
+        except:
+            return []
+    
+    def _save_paper_positions(self, positions: List[Dict]):
+        """Save paper trading positions to file
+        
+        Args:
+            positions: List of position dicts
+        """
+        os.makedirs('data', exist_ok=True)
+        with open(self.positions_file, 'w') as f:
+            json.dump(positions, f, indent=2)
+    
+    def _add_paper_position(self, position: Dict):
+        """Add a paper trading position to tracking file
+        
+        Args:
+            position: Position dict with keys: pair, entry, quantity, stop_loss, take_profit, trade_id
+        """
+        positions = self._load_paper_positions()
+        position['opened_at'] = datetime.now().isoformat()
+        position['id'] = position.get('trade_id', f"{position['pair']}_{int(time.time())}")
+        positions.append(position)
+        self._save_paper_positions(positions)
+        self.logger.info(f"Paper position added to tracking: {position['pair']}")
     
     def get_available_balance(self) -> float:
         """Get free USDT balance available for trading
@@ -286,6 +329,13 @@ class ExchangeManager:
             
             result['quantity'] = quantity
             result['position_usdt'] = position_usdt
+            
+            # Calculate stop loss and take profit if not provided (2:1 risk/reward)
+            if stop_loss is None:
+                stop_loss = entry_price * 0.98  # -2% stop loss
+            if take_profit is None:
+                take_profit = entry_price * 1.04  # +4% take profit (2:1 R:R)
+            
             result['stop_loss'] = stop_loss
             result['take_profit'] = take_profit
             
@@ -299,6 +349,20 @@ class ExchangeManager:
                     f"(${position_usdt:.2f}) - NOT EXECUTED ON EXCHANGE"
                 )
                 self.logger.warning(result['message'])
+                
+                # Increment trade counter for paper trades too
+                self._trades_today += 1
+                
+                # Add to paper positions file for monitor to track
+                paper_position = {
+                    'pair': pair,
+                    'entry': entry_price,
+                    'quantity': quantity,
+                    'stop_loss': stop_loss,
+                    'take_profit': take_profit,
+                    'trade_id': result['order_id']
+                }
+                self._add_paper_position(paper_position)
                 
             else:
                 # Live trading - extra safety log
@@ -421,15 +485,25 @@ class ExchangeManager:
             return result
     
     def get_open_positions(self) -> List[Dict]:
-        """Get all open positions (wrapper for API get_open_orders)
+        """Get all open positions
+        
+        For paper trading: loads from positions file
+        For live trading: queries API for open orders
         
         Returns:
             List of open orders/positions
         """
         try:
-            orders = self.api.get_open_orders()
-            self.logger.debug(f"Retrieved {len(orders)} open positions")
-            return orders
+            if self.dry_run:
+                # Paper trading - load from file
+                positions = self._load_paper_positions()
+                self.logger.debug(f"Retrieved {len(positions)} paper positions")
+                return positions
+            else:
+                # Live trading - query API
+                orders = self.api.get_open_orders()
+                self.logger.debug(f"Retrieved {len(orders)} open positions")
+                return orders
         except Exception as e:
             self.logger.error(f"Failed to get open positions: {e}")
             return []
