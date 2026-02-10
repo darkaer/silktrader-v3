@@ -6,6 +6,7 @@ Combines PionexAPI + RiskManager for validated order execution
 import sys
 import logging
 import time
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 # Add skills path for RiskManager import
@@ -18,17 +19,20 @@ from risk_manager import RiskManager
 class ExchangeManager:
     """High-level trading interface with comprehensive validation and risk management"""
     
-    def __init__(self, api: PionexAPI, risk_manager: RiskManager, dry_run: bool = False):
+    def __init__(self, api: PionexAPI, risk_manager: RiskManager, dry_run: bool = True, db=None):
         """Initialize ExchangeManager
         
         Args:
             api: Initialized PionexAPI client
             risk_manager: Initialized RiskManager
             dry_run: If True, simulate trades without placing real orders (paper trading)
+                     DEFAULT IS TRUE FOR SAFETY - must explicitly set to False for live trading
+            db: Optional TradingDatabase instance for logging
         """
         self.api = api
         self.risk_manager = risk_manager
         self.dry_run = dry_run
+        self.db = db
         
         # Setup logging
         self.logger = logging.getLogger('ExchangeManager')
@@ -45,6 +49,10 @@ class ExchangeManager:
         
         mode = "PAPER TRADING" if dry_run else "LIVE TRADING"
         self.logger.warning(f"ExchangeManager initialized in {mode} mode")
+        
+        # Extra safety warning if live trading
+        if not dry_run:
+            self.logger.critical("⚠️  LIVE TRADING MODE ENABLED - REAL MONEY AT RISK ⚠️")
     
     def get_available_balance(self) -> float:
         """Get free USDT balance available for trading
@@ -285,7 +293,7 @@ class ExchangeManager:
             if self.dry_run:
                 # Paper trading simulation
                 result['success'] = True
-                result['order_id'] = f"PAPER_{pair}_{int(time.time())}"
+                result['order_id'] = f"PAPER-{pair}-{int(time.time())}"
                 result['message'] = (
                     f"[PAPER TRADE] {side} {quantity:.8f} {pair} @ ${entry_price:.2f} "
                     f"(${position_usdt:.2f}) - NOT EXECUTED ON EXCHANGE"
@@ -293,7 +301,9 @@ class ExchangeManager:
                 self.logger.warning(result['message'])
                 
             else:
-                # Live trading
+                # Live trading - extra safety log
+                self.logger.critical(f"🔴 EXECUTING LIVE TRADE: {side} {quantity:.8f} {pair} @ ${entry_price:.2f}")
+                
                 order_result = self.api.place_order(
                     symbol=pair,
                     side=side.upper(),
@@ -319,12 +329,95 @@ class ExchangeManager:
                     result['message'] = f"Order failed: {result['error']}"
                     self.logger.error(result['message'])
             
+            # Step 3: Log trade to database
+            if result['success'] and self.db:
+                try:
+                    trade_data = {
+                        'trade_id': result['order_id'],
+                        'pair': pair,
+                        'side': side.upper(),
+                        'order_type': order_type.upper(),
+                        'entry_price': entry_price,
+                        'quantity': quantity,
+                        'position_usdt': position_usdt,
+                        'stop_loss': stop_loss,
+                        'take_profit': take_profit,
+                        'confidence_score': confidence,
+                        'paper_trading': self.dry_run,
+                        'status': 'OPEN',
+                        'entry_time': datetime.now().isoformat()
+                    }
+                    self.db.insert_trade(trade_data)
+                    self.logger.info(f"Trade logged to database: {result['order_id']}")
+                except Exception as e:
+                    self.logger.warning(f"Database trade logging failed: {e}")
+            
             return result
             
         except Exception as e:
             self.logger.error(f"Error executing trade for {pair}: {e}", exc_info=True)
             result['error'] = f"Execution error: {e}"
             result['message'] = result['error']
+            return result
+    
+    def close_position(self, trade_id: str, pair: str, exit_price: float, 
+                      entry_price: float, quantity: float, reason: str = "Manual close") -> Dict:
+        """Close a position and update database
+        
+        Args:
+            trade_id: Trade/order ID
+            pair: Trading pair
+            exit_price: Current exit price
+            entry_price: Original entry price
+            quantity: Position quantity
+            reason: Reason for closing (e.g., 'Stop loss hit', 'Take profit')
+            
+        Returns:
+            Dict with close result
+        """
+        result = {
+            'success': False,
+            'trade_id': trade_id,
+            'pair': pair
+        }
+        
+        try:
+            # Calculate P&L
+            pnl = (exit_price - entry_price) * quantity
+            pnl_percent = ((exit_price - entry_price) / entry_price) * 100
+            
+            result['exit_price'] = exit_price
+            result['pnl'] = pnl
+            result['pnl_percent'] = pnl_percent
+            result['reason'] = reason
+            
+            # Update database if available
+            if self.db:
+                try:
+                    exit_data = {
+                        'exit_price': exit_price,
+                        'exit_time': datetime.now().isoformat(),
+                        'entry_time': datetime.now().isoformat(),  # Will be updated by DB
+                        'realized_pnl': pnl,
+                        'pnl_percent': pnl_percent,
+                        'status': 'CLOSED'
+                    }
+                    self.db.update_trade_exit(trade_id, exit_data)
+                    self.logger.info(f"Trade exit logged to database: {trade_id}")
+                except Exception as e:
+                    self.logger.warning(f"Database exit logging failed: {e}")
+            
+            # Update daily P&L
+            self.update_daily_pnl(pnl)
+            
+            result['success'] = True
+            result['message'] = f"Position closed: {reason} - ${pnl:+.2f} ({pnl_percent:+.2f}%)"
+            
+            return result
+            
+        except Exception as e:
+            self.logger.error(f"Error closing position {trade_id}: {e}")
+            result['error'] = str(e)
             return result
     
     def get_open_positions(self) -> List[Dict]:
@@ -434,8 +527,8 @@ if __name__ == '__main__':
         api = PionexAPI('credentials/pionex.json')
         risk_manager = RiskManager('credentials/pionex.json')
         
-        # IMPORTANT: Start in paper trading mode
-        exchange_manager = ExchangeManager(api, risk_manager, dry_run=True)
+        # IMPORTANT: Defaults to paper trading mode (dry_run=True by default)
+        exchange_manager = ExchangeManager(api, risk_manager)
         
         print("\n" + "="*80)
         print("SilkTrader v3 - ExchangeManager Test Suite")
@@ -513,8 +606,8 @@ if __name__ == '__main__':
         print("\n" + "="*80)
         print("Test Suite Complete")
         print("="*80)
-        print("\nNote: All trades executed in PAPER TRADING mode (dry_run=True)")
-        print("To enable live trading, set dry_run=False when initializing ExchangeManager")
+        print("\nNote: All trades executed in PAPER TRADING mode (default behavior)")
+        print("To enable live trading, explicitly pass dry_run=False when initializing")
         
     except FileNotFoundError:
         print("ERROR: credentials/pionex.json not found!")

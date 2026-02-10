@@ -15,14 +15,23 @@ sys.path.append('skills/silktrader-trader/scripts')
 from pionex_api import PionexAPI
 from indicators import calc_all_indicators
 from risk_manager import RiskManager
+from database import TradingDatabase
 
 class PositionMonitor:
     """Monitor and manage open trading positions"""
     
-    def __init__(self, config_path='credentials/pionex.json', dry_run=True):
+    def __init__(self, config_path='credentials/pionex.json', dry_run=True, db=None):
+        """Initialize position monitor
+        
+        Args:
+            config_path: Path to credentials file
+            dry_run: If True, don't execute real trades
+            db: Optional TradingDatabase instance for logging
+        """
         self.api = PionexAPI(config_path)
         self.risk_mgr = RiskManager(config_path)
         self.dry_run = dry_run
+        self.db = db
         
         # Load positions from file or API
         self.positions_file = 'data/positions.json'
@@ -38,6 +47,7 @@ class PositionMonitor:
         print(f"📊 SilkTrader v3 - Position Monitor")
         print(f"{'='*70}")
         print(f"Mode: {'DRY RUN' if dry_run else '🔴 LIVE TRADING'}")
+        print(f"Database: {'✅ Connected' if db else '⚠️  Not connected'}")
         print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Open Positions: {len(self.positions)}")
         print(f"{'='*70}\n")
@@ -60,12 +70,21 @@ class PositionMonitor:
             json.dump(self.positions, f, indent=2)
     
     def add_position(self, position):
-        """Add new position to monitor"""
+        """Add new position to monitor
+        
+        Args:
+            position: Dict with keys: pair, entry, quantity, stop_loss, take_profit, trade_id (optional)
+        """
         position['opened_at'] = datetime.now().isoformat()
         position['id'] = f"{position['pair']}_{int(time.time())}"
+        
+        # If trade_id not provided, use the generated id
+        if 'trade_id' not in position:
+            position['trade_id'] = position['id']
+        
         self.positions.append(position)
         self.save_positions()
-        print(f"✅ Added position: {position['pair']}")
+        print(f"✅ Added position: {position['pair']} (Trade ID: {position['trade_id']})")
     
     def get_current_price(self, pair):
         """Get current market price"""
@@ -76,6 +95,38 @@ class PositionMonitor:
         except:
             pass
         return None
+    
+    def log_position_snapshot(self, position, current_price, pnl_usdt, pnl_pct, trailing_stop):
+        """Log position snapshot to database
+        
+        Args:
+            position: Position dict
+            current_price: Current market price
+            pnl_usdt: Unrealized P&L in USDT
+            pnl_pct: Unrealized P&L percentage
+            trailing_stop: Current trailing stop price
+        """
+        if not self.db:
+            return
+        
+        try:
+            snapshot = {
+                'trade_id': position.get('trade_id', position['id']),
+                'pair': position['pair'],
+                'current_price': current_price,
+                'entry_price': position['entry'],  # Added missing field
+                'quantity': position['quantity'],  # Added missing field
+                'unrealized_pnl': pnl_usdt,
+                'pnl_percent': pnl_pct,
+                'stop_loss': position.get('stop_loss'),  # Optional
+                'take_profit': position.get('take_profit'),  # Optional
+                'trailing_stop': trailing_stop,
+                'snapshot_time': datetime.now().isoformat()
+            }
+            self.db.insert_position_snapshot(snapshot)
+        except Exception as e:
+            # Show error for debugging but don't fail monitoring
+            print(f"   ⚠️  Snapshot logging failed: {e}")
     
     def check_position(self, position):
         """Check single position for exit conditions"""
@@ -128,6 +179,9 @@ class PositionMonitor:
                 position['trailing_stop'] = trailing_stop
                 print(f"   📈 {pair}: Trailing stop moved to ${trailing_stop:.6f}")
         
+        # Log position snapshot to database
+        self.log_position_snapshot(position, current_price, pnl_usdt, pnl_pct, trailing_stop)
+        
         # Status display
         status = "🟢" if pnl_usdt > 0 else "🔴"
         
@@ -167,7 +221,7 @@ class PositionMonitor:
         return None
     
     def close_position(self, exit_signal):
-        """Close a position"""
+        """Close a position and log to database"""
         position = exit_signal['position']
         pair = position['pair']
         quantity = position['quantity']
@@ -176,6 +230,7 @@ class PositionMonitor:
         pnl_usdt = exit_signal['pnl_usdt']
         pnl_pct = exit_signal['pnl_pct']
         position_id = position['id']
+        trade_id = position.get('trade_id', position_id)
         
         print(f"\n{'='*70}")
         print(f"🚪 CLOSING POSITION: {pair}")
@@ -204,6 +259,22 @@ class PositionMonitor:
         else:
             print(f"🔔 DRY RUN: Would SELL {quantity:.6f} {pair} @ ${exit_price:.6f}")
         
+        # Update database with exit data
+        if self.db:
+            try:
+                exit_data = {
+                    'exit_price': exit_price,
+                    'exit_time': datetime.now().isoformat(),
+                    'entry_time': position.get('opened_at', datetime.now().isoformat()),
+                    'realized_pnl': pnl_usdt,
+                    'pnl_percent': pnl_pct,
+                    'status': 'CLOSED'
+                }
+                self.db.update_trade_exit(trade_id, exit_data)
+                print(f"📝 Trade exit logged to database: {trade_id}")
+            except Exception as e:
+                print(f"⚠️  Database logging failed: {e}")
+        
         # Clear position tracking in risk manager
         self.risk_mgr.clear_position_tracking(position_id)
         
@@ -216,6 +287,7 @@ class PositionMonitor:
         
         # Log closed trade
         self.closed_today.append({
+            'trade_id': trade_id,
             'pair': pair,
             'entry': position['entry'],
             'exit': exit_price,
@@ -283,6 +355,15 @@ class PositionMonitor:
                 print(f"  Avg Loss: ${avg_loss:.2f}")
                 print(f"  Profit Factor: {profit_factor:.2f}")
         
+        if self.db:
+            print(f"\n📊 Database Statistics:")
+            try:
+                stats = self.db.get_database_stats()
+                print(f"  Total trades logged: {stats['trades']}")
+                print(f"  Position snapshots: {stats['position_snapshots']}")
+            except:
+                pass
+        
         print(f"{'='*70}\n")
     
     def run_once(self):
@@ -323,10 +404,20 @@ def main():
     parser.add_argument('--interval', type=int, default=30, help='Check interval in seconds')
     parser.add_argument('--once', action='store_true', help='Run once and exit')
     parser.add_argument('--add', type=str, help='Add position: PAIR,ENTRY,QUANTITY,SL,TP')
+    parser.add_argument('--no-db', action='store_true', help='Disable database logging')
     
     args = parser.parse_args()
     
-    monitor = PositionMonitor(dry_run=not args.live)
+    # Initialize database if enabled
+    db = None
+    if not args.no_db:
+        try:
+            db = TradingDatabase('data/silktrader.db')
+        except Exception as e:
+            print(f"⚠️  Database initialization failed: {e}")
+            print(f"   Continuing without database logging...\n")
+    
+    monitor = PositionMonitor(dry_run=not args.live, db=db)
     
     # Add position manually if specified
     if args.add:
@@ -345,12 +436,19 @@ def main():
             print(f"❌ Error adding position: {e}")
             print("Format: PAIR,ENTRY,QUANTITY,STOP_LOSS,TAKE_PROFIT")
             print("Example: BTC_USDT,50000,0.01,48500,52500")
+            if db:
+                db.close()
             return
     
-    if args.once:
-        monitor.run_once()
-    else:
-        monitor.run_continuous(interval_seconds=args.interval)
+    try:
+        if args.once:
+            monitor.run_once()
+        else:
+            monitor.run_continuous(interval_seconds=args.interval)
+    finally:
+        if db:
+            db.close()
+            print("📊 Database connection closed")
 
 if __name__ == '__main__':
     main()

@@ -8,6 +8,7 @@ import os
 import time
 import json
 import logging
+import uuid
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional
 
@@ -20,6 +21,7 @@ sys.path.append('skills/silktrader-trader/scripts')
 from lib.pionex_api import PionexAPI
 from lib.exchange_manager import ExchangeManager
 from lib.llm_decision import LLMDecisionEngine
+from lib.database import TradingDatabase
 from scanner import MarketScanner
 from risk_manager import RiskManager
 
@@ -43,17 +45,27 @@ class SilkTraderBot:
         
         self.dry_run = dry_run
         
+        # Initialize database for historical data
+        try:
+            self.db = TradingDatabase('data/silktrader.db')
+            self.db_enabled = True
+        except Exception as e:
+            print(f"⚠️  Warning: Database failed to initialize: {e}")
+            print("   Continuing without database logging\n")
+            self.db_enabled = False
+            self.db = None
+        
         # Initialize core components
         self.api = PionexAPI(config_path)
         self.risk_mgr = RiskManager(config_path)
-        self.exchange = ExchangeManager(self.api, self.risk_mgr, dry_run=dry_run)
+        self.exchange = ExchangeManager(self.api, self.risk_mgr, dry_run=dry_run, db=self.db)
         self.scanner = MarketScanner(self.api, self.exchange, config_path)
         
         # Initialize LLM decision engine with API key from config or env
         openrouter_key = self.config.get('openrouter_api_key', None)
         
         try:
-            self.llm = LLMDecisionEngine(api_key=openrouter_key)
+            self.llm = LLMDecisionEngine(api_key=openrouter_key, db=self.db)
             # Check if API key is configured
             if not self.llm.api_key:
                 print("⚠️  Warning: No OpenRouter API key found")
@@ -106,6 +118,16 @@ class SilkTraderBot:
             print(f"Decision Engine: ✅ LLM-Powered (Arcee AI Trinity - FREE)")
         else:
             print(f"Decision Engine: 📊 Scanner-Only Mode (Score-Based)")
+        
+        # Database status
+        if self.db_enabled:
+            try:
+                db_stats = self.db.get_database_stats()
+                print(f"Database: ✅ Connected ({db_stats.get('trades', 0)} trades logged)")
+            except:
+                print(f"Database: ⚠️  Connected (stats unavailable)")
+        else:
+            print(f"Database: ❌ Disabled")
         
         print(f"\n💰 Account Status:")
         print(f"   Balance: ${summary['available_balance']:.2f} USDT")
@@ -310,6 +332,8 @@ class SilkTraderBot:
     def run_cycle(self):
         """Run one complete trading cycle"""
         cycle_start = datetime.now()
+        scan_id = str(uuid.uuid4())
+        scan_time = cycle_start.isoformat()
         
         print(f"\n{'─'*70}")
         print(f"🔄 Starting Trading Cycle at {cycle_start.strftime('%H:%M:%S')}")
@@ -332,6 +356,15 @@ class SilkTraderBot:
         
         # Scan markets for opportunities
         opportunities = self.scan_markets()
+        
+        # Log scan results to database
+        if opportunities and self.db_enabled:
+            try:
+                inserted = self.db.insert_scan_results(scan_id, scan_time, opportunities)
+                print(f"📝 Logged {inserted} scan results to database\n")
+            except Exception as e:
+                print(f"⚠️  Database logging failed: {e}\n")
+                self.logger.warning(f"Scan result logging failed: {e}")
         
         if not opportunities:
             print("ℹ️  No opportunities found meeting criteria\n")
@@ -365,6 +398,14 @@ class SilkTraderBot:
                     time.sleep(1)  # Brief pause between trades
             
             print()  # Blank line between opportunities
+        
+        # Update daily summary in database
+        if self.db_enabled:
+            try:
+                today = datetime.now().strftime('%Y-%m-%d')
+                self.db.update_daily_summary(today, paper_trading=self.dry_run)
+            except Exception as e:
+                self.logger.warning(f"Daily summary update failed: {e}")
         
         # Cycle summary
         cycle_duration = (datetime.now() - cycle_start).total_seconds()
@@ -455,12 +496,33 @@ class SilkTraderBot:
         else:
             print(f"   No trades executed this session")
         
+        # Show database statistics if available
+        if self.db_enabled:
+            try:
+                db_stats = self.db.get_database_stats()
+                print(f"\n📊 Database Statistics:")
+                print(f"   Total trades logged: {db_stats.get('trades', 0)}")
+                print(f"   Total scans logged: {db_stats.get('scan_results', 0)}")
+                print(f"   LLM decisions logged: {db_stats.get('llm_decisions', 0)}")
+                print(f"   Database size: {db_stats.get('database_size_mb', 0):.2f} MB")
+            except Exception as e:
+                self.logger.warning(f"Failed to get database stats: {e}")
+        
         print(f"{'='*70}\n")
         
         self.logger.info(
             f"Session ended: {summary['trades_today']} trades, "
             f"{summary['open_positions']} positions, ${summary['daily_pnl']:+.2f} P&L"
         )
+    
+    def close(self):
+        """Clean shutdown of bot components"""
+        if self.db_enabled and self.db:
+            try:
+                self.db.close()
+                print("📊 Database connection closed")
+            except Exception as e:
+                self.logger.warning(f"Database close failed: {e}")
 
 
 def main():
@@ -534,6 +596,7 @@ LLM Mode:
             return
         print()
     
+    bot = None
     try:
         # Initialize bot
         bot = SilkTraderBot(config_path=args.config, dry_run=not args.live)
@@ -556,6 +619,10 @@ LLM Mode:
         import traceback
         traceback.print_exc()
         print()
+    finally:
+        # Clean shutdown
+        if bot:
+            bot.close()
 
 
 if __name__ == '__main__':

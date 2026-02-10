@@ -2,20 +2,23 @@
 import requests
 import json
 import os
+from datetime import datetime
 
 class LLMDecisionEngine:
     """LLM-powered trading decision engine using OpenRouter"""
     
-    def __init__(self, api_key: str = None, model: str = "arcee-ai/trinity-large-preview:free"):
+    def __init__(self, api_key: str = None, model: str = "arcee-ai/trinity-large-preview:free", db=None):
         """Initialize LLM decision engine
         
         Args:
             api_key: OpenRouter API key (uses OPENROUTER_API_KEY env var if not provided)
             model: Model identifier (default: arcee-ai/trinity-large-preview:free)
+            db: Optional TradingDatabase instance for logging decisions
         """
         self.api_key = api_key or os.getenv('OPENROUTER_API_KEY')
         self.model = model
         self.base_url = "https://openrouter.ai/api/v1/chat/completions"
+        self.db = db
         
     def analyze_opportunity(self, pair: str, indicators: dict, score: int) -> dict:
         """Get LLM trading decision for a specific opportunity
@@ -38,7 +41,27 @@ class LLMDecisionEngine:
         try:
             response = self._call_openrouter(prompt)
             decision = self._parse_decision(response)
+            
+            # Log decision to database if available
+            if self.db:
+                try:
+                    decision_data = {
+                        'pair': pair,
+                        'scanner_score': int(score * (100 / 7)),  # Convert to 0-100 scale
+                        'action': decision['action'],
+                        'confidence': decision['confidence'],
+                        'reasoning': decision['reasoning'],
+                        'indicators': indicators,
+                        'model': self.model,
+                        'decision_time': datetime.now().isoformat()
+                    }
+                    self.db.insert_llm_decision(decision_data)
+                except Exception as e:
+                    # Don't fail the decision if DB logging fails
+                    pass
+            
             return decision
+            
         except Exception as e:
             return {'action': 'WAIT', 'confidence': 0, 'reasoning': f'Error: {e}'}
     
