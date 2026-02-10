@@ -49,11 +49,22 @@ class SilkTraderBot:
         # Initialize LLM decision engine
         try:
             self.llm = LLMDecisionEngine()
-            self.llm_enabled = True
+            # Check if API key is configured
+            if not self.llm.api_key:
+                print("⚠️  Warning: No OpenRouter API key found")
+                print("   Set OPENROUTER_API_KEY environment variable to enable LLM mode")
+                print("   Continuing in SCANNER-ONLY mode (score-based decisions)\n")
+                self.llm_enabled = False
+            else:
+                self.llm_enabled = True
         except Exception as e:
             print(f"⚠️  Warning: LLM engine failed to initialize: {e}")
-            print("   Continuing without LLM (will use scanner scores only)\n")
+            print("   Continuing in SCANNER-ONLY mode (score-based decisions)\n")
             self.llm_enabled = False
+        
+        # Track consecutive LLM errors
+        self.llm_error_count = 0
+        self.llm_max_errors = 3  # Disable LLM after 3 consecutive errors
         
         # Setup logging
         self.log_file = 'logs/trading_log.txt'
@@ -84,7 +95,12 @@ class SilkTraderBot:
         print(f"{'='*70}")
         print(f"Mode: {'🟢 PAPER TRADING' if self.dry_run else '🔴 LIVE TRADING'}")
         print(f"Started: {self.session_start.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"LLM Engine: {'✅ Enabled' if self.llm_enabled else '❌ Disabled (score-only mode)'}")
+        
+        if self.llm_enabled:
+            print(f"Decision Engine: ✅ LLM-Powered (OpenRouter)")
+        else:
+            print(f"Decision Engine: 📊 Scanner-Only Mode (Score-Based)")
+        
         print(f"\n💰 Account Status:")
         print(f"   Balance: ${summary['available_balance']:.2f} USDT")
         print(f"   Open Positions: {summary['open_positions']}/{summary['max_positions']}")
@@ -136,7 +152,7 @@ class SilkTraderBot:
             return []
     
     def evaluate_with_llm(self, opp: Dict) -> tuple[bool, Optional[Dict]]:
-        """Evaluate opportunity with LLM decision engine
+        """Evaluate opportunity with LLM decision engine or scanner scores
         
         Args:
             opp: Opportunity dict from scanner
@@ -153,7 +169,7 @@ class SilkTraderBot:
         
         if not self.llm_enabled:
             # No LLM - use scanner score only
-            # High confidence if score >= 80
+            # High confidence if score >= 80, medium if >= 70
             confidence = min(10, int(score / 10))
             decision = {
                 'action': 'BUY' if score >= 70 else 'WAIT',
@@ -161,8 +177,13 @@ class SilkTraderBot:
                 'reasoning': f"Scanner score {score}/100 - {opp['reasoning']}"
             }
             
-            print(f"   🤖 Auto-Decision: {decision['action']} (confidence {confidence}/10)")
-            print(f"   💭 {decision['reasoning']}")
+            print(f"   📈 Score-Based Decision: {decision['action']} (confidence {confidence}/10)")
+            
+            # Truncate reasoning if too long
+            reasoning = decision['reasoning']
+            if len(reasoning) > 80:
+                reasoning = reasoning[:77] + "..."
+            print(f"   💭 {reasoning}")
             
             should_trade = decision['action'] == 'BUY' and confidence >= 7
             return should_trade, decision
@@ -172,6 +193,33 @@ class SilkTraderBot:
             # Convert score to 0-7 scale for LLM (it expects old format)
             llm_score = int(score / (100 / 7))
             decision = self.llm.analyze_opportunity(pair, indicators, llm_score)
+            
+            # Check if LLM returned an error
+            if decision['confidence'] == 0 or 'Error:' in decision['reasoning']:
+                # LLM error - increment counter and possibly disable
+                self.llm_error_count += 1
+                print(f"   ⚠️  LLM Error ({self.llm_error_count}/{self.llm_max_errors}): {decision['reasoning'][:60]}...")
+                
+                if self.llm_error_count >= self.llm_max_errors:
+                    print(f"   ⚠️  LLM disabled after {self.llm_max_errors} errors, switching to SCANNER-ONLY mode\n")
+                    self.llm_enabled = False
+                    self.logger.warning(f"LLM disabled after {self.llm_max_errors} consecutive errors")
+                    # Retry with scanner-only mode
+                    return self.evaluate_with_llm(opp)
+                
+                # Use scanner score as fallback
+                confidence = min(10, int(score / 10))
+                decision = {
+                    'action': 'BUY' if score >= 70 else 'WAIT',
+                    'confidence': confidence,
+                    'reasoning': f"Fallback to scanner score {score}/100"
+                }
+                print(f"   📈 Fallback Decision: {decision['action']} (confidence {confidence}/10)")
+                should_trade = decision['action'] == 'BUY' and confidence >= 7
+                return should_trade, decision
+            
+            # LLM success - reset error counter
+            self.llm_error_count = 0
             
             print(f"   🧠 AI Decision: {decision['action']} (confidence {decision['confidence']}/10)")
             
@@ -188,8 +236,18 @@ class SilkTraderBot:
             return should_trade, decision
             
         except Exception as e:
-            print(f"   ❌ LLM Error: {e}")
+            # LLM exception - increment counter
+            self.llm_error_count += 1
+            print(f"   ❌ LLM Exception ({self.llm_error_count}/{self.llm_max_errors}): {e}")
             self.logger.error(f"LLM error for {pair}: {e}", exc_info=True)
+            
+            if self.llm_error_count >= self.llm_max_errors:
+                print(f"   ⚠️  LLM disabled after {self.llm_max_errors} errors, switching to SCANNER-ONLY mode\n")
+                self.llm_enabled = False
+                self.logger.warning(f"LLM disabled after {self.llm_max_errors} consecutive errors")
+                # Retry with scanner-only mode
+                return self.evaluate_with_llm(opp)
+            
             return False, None
     
     def execute_trade(self, opp: Dict, decision: Dict) -> bool:
@@ -288,7 +346,7 @@ class SilkTraderBot:
                 print(f"\n⚠️  Daily limits reached mid-cycle\n")
                 break
             
-            # Evaluate with LLM
+            # Evaluate with LLM or scanner scores
             should_trade, decision = self.evaluate_with_llm(opp)
             
             if should_trade and decision:
@@ -415,6 +473,10 @@ Examples:
   python silktrader_bot.py --live --interval 900
 
 NOTE: Always test thoroughly in paper trading mode before going live!
+
+LLM Mode:
+  Set OPENROUTER_API_KEY environment variable to enable LLM-powered decisions.
+  Without it, bot uses scanner scores only (score-based mode).
         """
     )
     
