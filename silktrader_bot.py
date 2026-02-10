@@ -34,6 +34,9 @@ class SilkTraderBot:
             config_path: Path to configuration file
             dry_run: If True, simulates trades without executing
         """
+        # Store config path for later use
+        self.config_path = config_path
+        
         # Load configuration
         with open(config_path, 'r') as f:
             self.config = json.load(f)
@@ -44,7 +47,7 @@ class SilkTraderBot:
         self.api = PionexAPI(config_path)
         self.risk_mgr = RiskManager(config_path)
         self.exchange = ExchangeManager(self.api, self.risk_mgr, dry_run=dry_run)
-        self.scanner = MarketScanner(self.api, self.exchange)
+        self.scanner = MarketScanner(self.api, self.exchange, config_path)
         
         # Initialize LLM decision engine with API key from config or env
         openrouter_key = self.config.get('openrouter_api_key', None)
