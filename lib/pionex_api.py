@@ -147,7 +147,8 @@ class PionexAPI:
         sorted_params = sorted(params.items())
         query = '&'.join([f"{k}={v}" for k, v in sorted_params])
         
-        body = json.dumps(data) if data else ''
+        # Serialize JSON body for signature (compact format, no spaces)
+        body = json.dumps(data, separators=(',', ':')) if data else ''
         
         signature = self._generate_signature(method, endpoint, query, body)
         
@@ -161,11 +162,13 @@ class PionexAPI:
         
         for attempt in range(max_retries):
             try:
+                # FIXED: Send the exact body string used for signature calculation
+                # instead of letting requests re-serialize it with different formatting
                 response = self.session.request(
                     method=method,
                     url=url,
                     params=params,
-                    json=data,
+                    data=body if body else None,  # Send pre-serialized JSON string
                     headers=headers,
                     timeout=10
                 )
@@ -309,15 +312,43 @@ class PionexAPI:
     
     def place_order(self, symbol: str, side: str, order_type: str, quantity: float, 
                     price: Optional[float] = None, client_order_id: Optional[str] = None) -> Dict:
+        """Place order with correct parameters for each order type
+        
+        Pionex API requires different parameters based on order type:
+        - Market SELL: use 'size' (quantity in base currency, e.g., tokens to sell)
+        - Market BUY: use 'amount' (total in quote currency, e.g., USDT to spend)
+        - Limit orders: use 'size' + 'price' (both BUY and SELL)
+        
+        Args:
+            symbol: Trading pair (e.g., 'BTC_USDT')
+            side: 'BUY' or 'SELL'
+            order_type: 'MARKET' or 'LIMIT'
+            quantity: For SELL - tokens to sell; For BUY - USDT to spend (market) or tokens to buy (limit)
+            price: Price for limit orders (required for LIMIT, ignored for MARKET)
+            client_order_id: Optional client order identifier
+        
+        Returns:
+            API response dict with order details or error
+        """
         data = {
             'symbol': symbol,
             'side': side.upper(),
-            'type': order_type.upper(),
-            'amount': str(quantity)
+            'type': order_type.upper()
         }
         
-        if price and order_type.upper() == 'LIMIT':
-            data['price'] = str(price)
+        # FIXED: Use correct parameter based on order type and side
+        if order_type.upper() == 'MARKET':
+            if side.upper() == 'SELL':
+                # Market sell: use 'size' (quantity of tokens to sell)
+                data['size'] = str(quantity)
+            else:  # BUY
+                # Market buy: use 'amount' (total USDT to spend)
+                data['amount'] = str(quantity)
+        else:  # LIMIT
+            # Limit orders always use 'size' + 'price' for both BUY and SELL
+            data['size'] = str(quantity)
+            if price:
+                data['price'] = str(price)
         
         if client_order_id:
             data['clientOrderId'] = client_order_id
