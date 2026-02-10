@@ -19,13 +19,14 @@ from risk_manager import RiskManager
 class ExchangeManager:
     """High-level trading interface with comprehensive validation and risk management"""
     
-    def __init__(self, api: PionexAPI, risk_manager: RiskManager, dry_run: bool = False, db=None):
+    def __init__(self, api: PionexAPI, risk_manager: RiskManager, dry_run: bool = True, db=None):
         """Initialize ExchangeManager
         
         Args:
             api: Initialized PionexAPI client
             risk_manager: Initialized RiskManager
             dry_run: If True, simulate trades without placing real orders (paper trading)
+                     DEFAULT IS TRUE FOR SAFETY - must explicitly set to False for live trading
             db: Optional TradingDatabase instance for logging
         """
         self.api = api
@@ -48,6 +49,10 @@ class ExchangeManager:
         
         mode = "PAPER TRADING" if dry_run else "LIVE TRADING"
         self.logger.warning(f"ExchangeManager initialized in {mode} mode")
+        
+        # Extra safety warning if live trading
+        if not dry_run:
+            self.logger.critical("⚠️  LIVE TRADING MODE ENABLED - REAL MONEY AT RISK ⚠️")
     
     def get_available_balance(self) -> float:
         """Get free USDT balance available for trading
@@ -296,7 +301,9 @@ class ExchangeManager:
                 self.logger.warning(result['message'])
                 
             else:
-                # Live trading
+                # Live trading - extra safety log
+                self.logger.critical(f"🔴 EXECUTING LIVE TRADE: {side} {quantity:.8f} {pair} @ ${entry_price:.2f}")
+                
                 order_result = self.api.place_order(
                     symbol=pair,
                     side=side.upper(),
@@ -520,8 +527,8 @@ if __name__ == '__main__':
         api = PionexAPI('credentials/pionex.json')
         risk_manager = RiskManager('credentials/pionex.json')
         
-        # IMPORTANT: Start in paper trading mode
-        exchange_manager = ExchangeManager(api, risk_manager, dry_run=True)
+        # IMPORTANT: Defaults to paper trading mode (dry_run=True by default)
+        exchange_manager = ExchangeManager(api, risk_manager)
         
         print("\n" + "="*80)
         print("SilkTrader v3 - ExchangeManager Test Suite")
@@ -599,8 +606,8 @@ if __name__ == '__main__':
         print("\n" + "="*80)
         print("Test Suite Complete")
         print("="*80)
-        print("\nNote: All trades executed in PAPER TRADING mode (dry_run=True)")
-        print("To enable live trading, set dry_run=False when initializing ExchangeManager")
+        print("\nNote: All trades executed in PAPER TRADING mode (default behavior)")
+        print("To enable live trading, explicitly pass dry_run=False when initializing")
         
     except FileNotFoundError:
         print("ERROR: credentials/pionex.json not found!")
