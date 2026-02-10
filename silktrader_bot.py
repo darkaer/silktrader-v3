@@ -22,6 +22,7 @@ from lib.pionex_api import PionexAPI
 from lib.exchange_manager import ExchangeManager
 from lib.llm_decision import LLMDecisionEngine
 from lib.database import TradingDatabase
+from lib.telegram_notifier import TelegramNotifier
 from scanner import MarketScanner
 from risk_manager import RiskManager
 
@@ -44,6 +45,9 @@ class SilkTraderBot:
             self.config = json.load(f)
         
         self.dry_run = dry_run
+        
+        # Initialize Telegram notifier
+        self.telegram = TelegramNotifier(config_path, enabled=True)
         
         # Initialize database for historical data
         try:
@@ -82,7 +86,7 @@ class SilkTraderBot:
         
         # Track consecutive LLM errors
         self.llm_error_count = 0
-        self.llm_max_errors = 3  # Disable LLM after 3 consecutive errors
+        self.llm_max_errors = 3
         
         # Setup logging
         self.log_file = 'logs/trading_log.txt'
@@ -103,6 +107,10 @@ class SilkTraderBot:
         # Print startup banner
         self._print_banner()
         self.logger.info(f"Bot started in {'DRY RUN' if dry_run else 'LIVE'} mode")
+        
+        # Send Telegram bot started notification
+        mode = "PAPER TRADING" if dry_run else "LIVE TRADING"
+        self.telegram.send_bot_started(mode)
     
     def _print_banner(self):
         """Print startup banner"""
@@ -129,6 +137,9 @@ class SilkTraderBot:
         else:
             print(f"Database: ❌ Disabled")
         
+        # Telegram status
+        print(f"Telegram: {'✅ Enabled' if self.telegram.enabled else '⚠️  Disabled'}")
+        
         print(f"\n💰 Account Status:")
         print(f"   Balance: ${summary['available_balance']:.2f} USDT")
         print(f"   Open Positions: {summary['open_positions']}/{summary['max_positions']}")
@@ -153,7 +164,6 @@ class SilkTraderBot:
         scanner_config = self.config['scanner_config']
         
         if min_score is None:
-            # Scanner uses 0-100 scale, config has 0-7 scale, convert
             min_score = int(scanner_config['min_score'] * (100 / 7))
         
         if top_n is None:
@@ -197,7 +207,6 @@ class SilkTraderBot:
         
         if not self.llm_enabled:
             # No LLM - use scanner score only
-            # High confidence if score >= 80, medium if >= 70
             confidence = min(10, int(score / 10))
             decision = {
                 'action': 'BUY' if score >= 70 else 'WAIT',
@@ -207,7 +216,6 @@ class SilkTraderBot:
             
             print(f"   📈 Score-Based Decision: {decision['action']} (confidence {confidence}/10)")
             
-            # Truncate reasoning if too long
             reasoning = decision['reasoning']
             if len(reasoning) > 80:
                 reasoning = reasoning[:77] + "..."
@@ -218,13 +226,10 @@ class SilkTraderBot:
         
         # Use LLM for decision
         try:
-            # Convert score to 0-7 scale for LLM (it expects old format)
             llm_score = int(score / (100 / 7))
             decision = self.llm.analyze_opportunity(pair, indicators, llm_score)
             
-            # Check if LLM returned an error
             if decision['confidence'] == 0 or 'Error:' in decision['reasoning']:
-                # LLM error - increment counter and possibly disable
                 self.llm_error_count += 1
                 print(f"   ⚠️  LLM Error ({self.llm_error_count}/{self.llm_max_errors}): {decision['reasoning'][:60]}...")
                 
@@ -232,10 +237,8 @@ class SilkTraderBot:
                     print(f"   ⚠️  LLM disabled after {self.llm_max_errors} errors, switching to SCANNER-ONLY mode\n")
                     self.llm_enabled = False
                     self.logger.warning(f"LLM disabled after {self.llm_max_errors} consecutive errors")
-                    # Retry with scanner-only mode
                     return self.evaluate_with_llm(opp)
                 
-                # Use scanner score as fallback
                 confidence = min(10, int(score / 10))
                 decision = {
                     'action': 'BUY' if score >= 70 else 'WAIT',
@@ -246,12 +249,10 @@ class SilkTraderBot:
                 should_trade = decision['action'] == 'BUY' and confidence >= 7
                 return should_trade, decision
             
-            # LLM success - reset error counter
             self.llm_error_count = 0
             
             print(f"   🧠 AI Decision: {decision['action']} (confidence {decision['confidence']}/10)")
             
-            # Truncate reasoning if too long
             reasoning = decision['reasoning']
             if len(reasoning) > 80:
                 reasoning = reasoning[:77] + "..."
@@ -259,12 +260,10 @@ class SilkTraderBot:
             
             self.logger.info(f"{pair}: {decision['action']} {decision['confidence']}/10 - {decision['reasoning']}")
             
-            # Should trade if BUY with high confidence
             should_trade = decision['action'] == 'BUY' and decision['confidence'] >= 7
             return should_trade, decision
             
         except Exception as e:
-            # LLM exception - increment counter
             self.llm_error_count += 1
             print(f"   ❌ LLM Exception ({self.llm_error_count}/{self.llm_max_errors}): {e}")
             self.logger.error(f"LLM error for {pair}: {e}", exc_info=True)
@@ -273,7 +272,6 @@ class SilkTraderBot:
                 print(f"   ⚠️  LLM disabled after {self.llm_max_errors} errors, switching to SCANNER-ONLY mode\n")
                 self.llm_enabled = False
                 self.logger.warning(f"LLM disabled after {self.llm_max_errors} consecutive errors")
-                # Retry with scanner-only mode
                 return self.evaluate_with_llm(opp)
             
             return False, None
@@ -290,13 +288,12 @@ class SilkTraderBot:
         """
         pair = opp['pair']
         entry_price = opp['entry_price']
-        confidence = opp['score']  # Use scanner score for confidence
+        confidence = opp['score']
         
         print(f"   ⚡ Executing trade...")
         self.logger.info(f"Attempting trade: {pair} @ ${entry_price:.6f}")
         
         try:
-            # Execute via ExchangeManager (handles all validation)
             result = self.exchange.execute_trade(
                 pair=pair,
                 side='BUY',
@@ -309,13 +306,23 @@ class SilkTraderBot:
                 print(f"      Order: {result['order_id']}")
                 print(f"      Position: ${result['position_usdt']:.2f} ({result['quantity']:.6f} {pair.split('_')[0]})")
                 
-                # Only show stop loss/take profit if they exist (may be None in paper trading)
                 if result.get('stop_loss') is not None and result.get('take_profit') is not None:
                     print(f"      Stop Loss: ${result['stop_loss']:.6f} | Take Profit: ${result['take_profit']:.6f}")
                 
                 self.logger.info(
                     f"Trade executed: {pair} {result['order_id']} - "
                     f"${result['position_usdt']:.2f} @ ${entry_price:.6f}"
+                )
+                
+                # Send Telegram notification for new position
+                self.telegram.send_position_opened(
+                    pair=pair,
+                    side='BUY',
+                    entry_price=entry_price,
+                    quantity=result['quantity'],
+                    position_usdt=result['position_usdt'],
+                    stop_loss=result.get('stop_loss', 0),
+                    take_profit=result.get('take_profit', 0)
                 )
                 
                 return True
@@ -370,7 +377,6 @@ class SilkTraderBot:
             print("ℹ️  No opportunities found meeting criteria\n")
             self.logger.info("No opportunities found")
             
-            # Still show current status
             summary = self.exchange.get_position_summary()
             print(f"💼 Current Status:")
             print(f"   Balance: ${summary['available_balance']:.2f}")
@@ -382,22 +388,20 @@ class SilkTraderBot:
         trades_executed = 0
         
         for opp in opportunities:
-            # Check limits before each trade
             summary = self.exchange.get_position_summary()
             if not summary['can_trade']:
                 print(f"\n⚠️  Daily limits reached mid-cycle\n")
                 break
             
-            # Evaluate with LLM or scanner scores
             should_trade, decision = self.evaluate_with_llm(opp)
             
             if should_trade and decision:
                 success = self.execute_trade(opp, decision)
                 if success:
                     trades_executed += 1
-                    time.sleep(1)  # Brief pause between trades
+                    time.sleep(1)
             
-            print()  # Blank line between opportunities
+            print()
         
         # Update daily summary in database
         if self.db_enabled:
@@ -443,10 +447,8 @@ class SilkTraderBot:
         
         try:
             while True:
-                # Run trading cycle
                 self.run_cycle()
                 
-                # Check if should continue
                 summary = self.exchange.get_position_summary()
                 
                 if not summary['can_trade']:
@@ -457,7 +459,6 @@ class SilkTraderBot:
                         self.logger.info(f"Daily limit reached: {summary['limit_message']}")
                         break
                 
-                # Wait for next cycle
                 next_scan = datetime.now() + timedelta(seconds=scan_interval_seconds)
                 print(f"⏳ Next scan at {next_scan.strftime('%H:%M:%S')}")
                 print(f"   Waiting {scan_interval_seconds}s...\n")
@@ -468,7 +469,6 @@ class SilkTraderBot:
             print(f"\n\n⚠️  Bot Stopped by User\n")
             self.logger.info("Bot stopped by user")
         
-        # Print session summary
         self.print_summary()
     
     def print_summary(self):
@@ -496,7 +496,6 @@ class SilkTraderBot:
         else:
             print(f"   No trades executed this session")
         
-        # Show database statistics if available
         if self.db_enabled:
             try:
                 db_stats = self.db.get_database_stats()
@@ -514,9 +513,40 @@ class SilkTraderBot:
             f"Session ended: {summary['trades_today']} trades, "
             f"{summary['open_positions']} positions, ${summary['daily_pnl']:+.2f} P&L"
         )
+        
+        # Send daily summary via Telegram if there were trades
+        if summary['trades_today'] > 0:
+            # Get win/loss stats from database if available
+            wins = 0
+            losses = 0
+            win_rate = 0.0
+            
+            if self.db_enabled:
+                try:
+                    today = datetime.now().strftime('%Y-%m-%d')
+                    daily_stats = self.db.get_daily_summary(today)
+                    if daily_stats:
+                        wins = daily_stats.get('wins', 0)
+                        losses = daily_stats.get('losses', 0)
+                        if wins + losses > 0:
+                            win_rate = (wins / (wins + losses)) * 100
+                except:
+                    pass
+            
+            self.telegram.send_daily_summary(
+                trades_today=summary['trades_today'],
+                wins=wins,
+                losses=losses,
+                total_pnl=summary['daily_pnl'],
+                win_rate=win_rate,
+                open_positions=summary['open_positions']
+            )
     
     def close(self):
         """Clean shutdown of bot components"""
+        # Send bot stopped notification
+        self.telegram.send_bot_stopped("User stopped")
+        
         if self.db_enabled and self.db:
             try:
                 self.db.close()
@@ -598,15 +628,12 @@ LLM Mode:
     
     bot = None
     try:
-        # Initialize bot
         bot = SilkTraderBot(config_path=args.config, dry_run=not args.live)
         
         if args.once:
-            # Single cycle mode
             bot.run_cycle()
             bot.print_summary()
         else:
-            # Continuous trading mode
             bot.run_continuous(scan_interval_seconds=args.interval)
             
     except FileNotFoundError as e:
@@ -620,7 +647,6 @@ LLM Mode:
         traceback.print_exc()
         print()
     finally:
-        # Clean shutdown
         if bot:
             bot.close()
 
