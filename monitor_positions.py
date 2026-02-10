@@ -16,6 +16,7 @@ from pionex_api import PionexAPI
 from indicators import calc_all_indicators
 from risk_manager import RiskManager
 from database import TradingDatabase
+from telegram_notifier import TelegramNotifier
 
 class PositionMonitor:
     """Monitor and manage open trading positions"""
@@ -33,6 +34,9 @@ class PositionMonitor:
         self.dry_run = dry_run
         self.db = db
         
+        # Initialize Telegram notifier
+        self.telegram = TelegramNotifier(config_path, enabled=True)
+        
         # Load positions from file or API
         self.positions_file = 'data/positions.json'
         self.positions = self.load_positions()
@@ -48,6 +52,7 @@ class PositionMonitor:
         print(f"{'='*70}")
         print(f"Mode: {'DRY RUN' if dry_run else '🔴 LIVE TRADING'}")
         print(f"Database: {'✅ Connected' if db else '⚠️  Not connected'}")
+        print(f"Telegram: {'✅ Enabled' if self.telegram.enabled else '⚠️  Disabled'}")
         print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"Open Positions: {len(self.positions)}")
         print(f"{'='*70}\n")
@@ -114,19 +119,41 @@ class PositionMonitor:
                 'trade_id': position.get('trade_id', position['id']),
                 'pair': position['pair'],
                 'current_price': current_price,
-                'entry_price': position['entry'],  # Added missing field
-                'quantity': position['quantity'],  # Added missing field
+                'entry_price': position['entry'],
+                'quantity': position['quantity'],
                 'unrealized_pnl': pnl_usdt,
                 'pnl_percent': pnl_pct,
-                'stop_loss': position.get('stop_loss'),  # Optional
-                'take_profit': position.get('take_profit'),  # Optional
+                'stop_loss': position.get('stop_loss'),
+                'take_profit': position.get('take_profit'),
                 'trailing_stop': trailing_stop,
                 'snapshot_time': datetime.now().isoformat()
             }
             self.db.insert_position_snapshot(snapshot)
         except Exception as e:
-            # Show error for debugging but don't fail monitoring
             print(f"   ⚠️  Snapshot logging failed: {e}")
+    
+    def calculate_duration(self, opened_at):
+        """Calculate position duration string
+        
+        Args:
+            opened_at: ISO format datetime string
+            
+        Returns:
+            Duration string like '2h 15m' or '45m'
+        """
+        try:
+            opened = datetime.fromisoformat(opened_at)
+            duration = datetime.now() - opened
+            
+            hours = int(duration.total_seconds() // 3600)
+            minutes = int((duration.total_seconds() % 3600) // 60)
+            
+            if hours > 0:
+                return f"{hours}h {minutes}m"
+            else:
+                return f"{minutes}m"
+        except:
+            return None
     
     def check_position(self, position):
         """Check single position for exit conditions"""
@@ -154,7 +181,7 @@ class PositionMonitor:
         trailing_stop = position.get('trailing_stop', stop_loss)
         
         # Calculate ATR from price range (simplified)
-        atr = (take_profit - entry) / 3  # Rough estimate
+        atr = (take_profit - entry) / 3
         
         if not trailing_active:
             # Check if should activate trailing stop
@@ -168,6 +195,14 @@ class PositionMonitor:
                 position['trailing_active'] = True
                 position['trailing_stop'] = trailing_stop
                 print(f"   🎯 {pair}: Trailing stop ACTIVATED at ${trailing_stop:.6f}")
+                
+                # Send Telegram notification
+                self.telegram.send_trailing_stop_activated(
+                    pair=pair,
+                    current_price=current_price,
+                    new_stop=trailing_stop,
+                    profit_pct=pnl_pct
+                )
         else:
             # Update trailing stop if price moved up
             should_update, new_stop = self.risk_mgr.calculate_trailing_stop(
@@ -175,9 +210,18 @@ class PositionMonitor:
             )
             
             if should_update and new_stop > trailing_stop:
+                old_stop = trailing_stop
                 trailing_stop = new_stop
                 position['trailing_stop'] = trailing_stop
                 print(f"   📈 {pair}: Trailing stop moved to ${trailing_stop:.6f}")
+                
+                # Send Telegram notification
+                self.telegram.send_trailing_stop_updated(
+                    pair=pair,
+                    old_stop=old_stop,
+                    new_stop=trailing_stop,
+                    profit_pct=pnl_pct
+                )
         
         # Log position snapshot to database
         self.log_position_snapshot(position, current_price, pnl_usdt, pnl_pct, trailing_stop)
@@ -217,7 +261,7 @@ class PositionMonitor:
                 'pnl_pct': pnl_pct
             }
         
-        print()  # Blank line between positions
+        print()
         return None
     
     def close_position(self, exit_signal):
@@ -232,6 +276,9 @@ class PositionMonitor:
         position_id = position['id']
         trade_id = position.get('trade_id', position_id)
         
+        # Calculate duration
+        duration = self.calculate_duration(position.get('opened_at'))
+        
         print(f"\n{'='*70}")
         print(f"🚪 CLOSING POSITION: {pair}")
         print(f"{'='*70}")
@@ -240,6 +287,8 @@ class PositionMonitor:
         print(f"Exit: ${exit_price:.6f}")
         print(f"Quantity: {quantity:.6f}")
         print(f"P&L: {pnl_pct:+.2f}% (${pnl_usdt:+.2f})")
+        if duration:
+            print(f"Duration: {duration}")
         print(f"{'='*70}\n")
         
         if not self.dry_run:
@@ -258,6 +307,18 @@ class PositionMonitor:
                 return False
         else:
             print(f"🔔 DRY RUN: Would SELL {quantity:.6f} {pair} @ ${exit_price:.6f}")
+        
+        # Send Telegram notification
+        self.telegram.send_position_closed(
+            pair=pair,
+            reason=reason,
+            entry_price=position['entry'],
+            exit_price=exit_price,
+            quantity=quantity,
+            pnl_usdt=pnl_usdt,
+            pnl_pct=pnl_pct,
+            duration=duration
+        )
         
         # Update database with exit data
         if self.db:
@@ -388,7 +449,7 @@ class PositionMonitor:
                 self.run_once()
                 
                 # Wait for next check
-                if self.positions:  # Only show countdown if positions exist
+                if self.positions:
                     print(f"⏳ Next check in {interval_seconds}s...")
                 time.sleep(interval_seconds)
                 
