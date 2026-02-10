@@ -5,11 +5,9 @@ Sends trading notifications via Telegram bot
 """
 import logging
 import json
+import requests
 from datetime import datetime
-from typing import Optional, Dict
-import asyncio
-from telegram import Bot
-from telegram.error import TelegramError
+from typing import Optional
 
 class TelegramNotifier:
     """Send trading notifications via Telegram"""
@@ -22,8 +20,9 @@ class TelegramNotifier:
             enabled: Whether notifications are enabled
         """
         self.enabled = enabled
-        self.bot = None
+        self.bot_token = None
         self.chat_id = None
+        self.base_url = None
         
         # Setup logging
         self.logger = logging.getLogger('TelegramNotifier')
@@ -45,15 +44,15 @@ class TelegramNotifier:
             
             telegram_config = config.get('telegram', {})
             
-            bot_token = telegram_config.get('bot_token')
+            self.bot_token = telegram_config.get('bot_token')
             self.chat_id = telegram_config.get('chat_id')
             
-            if not bot_token or not self.chat_id:
+            if not self.bot_token or not self.chat_id:
                 self.logger.warning("Telegram credentials not configured. Notifications disabled.")
                 self.enabled = False
                 return
             
-            self.bot = Bot(token=bot_token)
+            self.base_url = f"https://api.telegram.org/bot{self.bot_token}"
             self.logger.info("Telegram notifier initialized successfully")
             
         except FileNotFoundError:
@@ -63,8 +62,8 @@ class TelegramNotifier:
             self.logger.error(f"Failed to initialize Telegram bot: {e}")
             self.enabled = False
     
-    def _send_message_sync(self, message: str, parse_mode: str = 'Markdown') -> bool:
-        """Send message synchronously (creates event loop if needed)
+    def _send_message(self, message: str, parse_mode: str = 'Markdown') -> bool:
+        """Send message via Telegram Bot API
         
         Args:
             message: Message text
@@ -73,39 +72,32 @@ class TelegramNotifier:
         Returns:
             Success status
         """
-        if not self.enabled or not self.bot:
+        if not self.enabled or not self.bot_token:
             return False
         
         try:
-            # Try to get running event loop
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                # No running loop, create new one
-                loop = asyncio.new_event_loop()
-                asyncio.set_event_loop(loop)
-                result = loop.run_until_complete(
-                    self.bot.send_message(
-                        chat_id=self.chat_id,
-                        text=message,
-                        parse_mode=parse_mode
-                    )
-                )
-                loop.close()
+            url = f"{self.base_url}/sendMessage"
+            payload = {
+                'chat_id': self.chat_id,
+                'text': message,
+                'parse_mode': parse_mode
+            }
+            
+            response = requests.post(url, json=payload, timeout=10)
+            response.raise_for_status()
+            
+            result = response.json()
+            if result.get('ok'):
+                self.logger.debug("Telegram message sent successfully")
+                return True
             else:
-                # Running loop exists, create task
-                result = loop.create_task(
-                    self.bot.send_message(
-                        chat_id=self.chat_id,
-                        text=message,
-                        parse_mode=parse_mode
-                    )
-                )
-            
-            self.logger.debug(f"Telegram message sent successfully")
-            return True
-            
-        except TelegramError as e:
+                self.logger.error(f"Telegram API error: {result.get('description', 'Unknown error')}")
+                return False
+                
+        except requests.exceptions.Timeout:
+            self.logger.error("Telegram request timed out")
+            return False
+        except requests.exceptions.RequestException as e:
             self.logger.error(f"Failed to send Telegram message: {e}")
             return False
         except Exception as e:
@@ -145,7 +137,7 @@ class TelegramNotifier:
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         """
         
-        return self._send_message_sync(message)
+        return self._send_message(message)
     
     def send_position_closed(self, pair: str, reason: str, entry_price: float, 
                             exit_price: float, quantity: float, pnl_usdt: float, 
@@ -190,7 +182,7 @@ class TelegramNotifier:
         
         message += f"\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         
-        return self._send_message_sync(message)
+        return self._send_message(message)
     
     def send_trailing_stop_activated(self, pair: str, current_price: float, 
                                     new_stop: float, profit_pct: float) -> bool:
@@ -215,7 +207,7 @@ class TelegramNotifier:
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         """
         
-        return self._send_message_sync(message)
+        return self._send_message(message)
     
     def send_trailing_stop_updated(self, pair: str, old_stop: float, 
                                    new_stop: float, profit_pct: float) -> bool:
@@ -240,7 +232,7 @@ class TelegramNotifier:
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         """
         
-        return self._send_message_sync(message)
+        return self._send_message(message)
     
     def send_daily_summary(self, trades_today: int, wins: int, losses: int, 
                           total_pnl: float, win_rate: float, 
@@ -273,7 +265,7 @@ class TelegramNotifier:
 📅 {datetime.now().strftime('%Y-%m-%d')}
         """
         
-        return self._send_message_sync(message)
+        return self._send_message(message)
     
     def send_error(self, error_type: str, details: str) -> bool:
         """Send error notification
@@ -293,7 +285,7 @@ class TelegramNotifier:
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         """
         
-        return self._send_message_sync(message)
+        return self._send_message(message)
     
     def send_bot_started(self, mode: str = "PAPER TRADING") -> bool:
         """Notify when bot starts
@@ -314,7 +306,7 @@ class TelegramNotifier:
 SilkTrader v3 is now running autonomously.
         """
         
-        return self._send_message_sync(message)
+        return self._send_message(message)
     
     def send_bot_stopped(self, reason: str = "User stopped") -> bool:
         """Notify when bot stops
@@ -333,7 +325,7 @@ SilkTrader v3 is now running autonomously.
 SilkTrader v3 has been stopped.
         """
         
-        return self._send_message_sync(message)
+        return self._send_message(message)
     
     def send_custom_message(self, title: str, body: str, icon: str = "ℹ️") -> bool:
         """Send custom notification
@@ -353,11 +345,12 @@ SilkTrader v3 has been stopped.
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         """
         
-        return self._send_message_sync(message)
+        return self._send_message(message)
 
 if __name__ == '__main__':
     # Test script
     import sys
+    import time
     
     notifier = TelegramNotifier()
     
@@ -369,11 +362,13 @@ if __name__ == '__main__':
     
     # Test bot start
     print("1. Sending bot start notification...")
-    notifier.send_bot_started("PAPER TRADING")
+    if notifier.send_bot_started("PAPER TRADING"):
+        print("   ✅ Sent!")
+    time.sleep(0.5)
     
     # Test position opened
     print("2. Sending position opened notification...")
-    notifier.send_position_opened(
+    if notifier.send_position_opened(
         pair="BTC_USDT",
         side="BUY",
         entry_price=45000.00,
@@ -381,20 +376,24 @@ if __name__ == '__main__':
         position_usdt=90.00,
         stop_loss=44100.00,
         take_profit=46350.00
-    )
+    ):
+        print("   ✅ Sent!")
+    time.sleep(0.5)
     
     # Test trailing stop
     print("3. Sending trailing stop notification...")
-    notifier.send_trailing_stop_activated(
+    if notifier.send_trailing_stop_activated(
         pair="BTC_USDT",
         current_price=46000.00,
         new_stop=45540.00,
         profit_pct=2.22
-    )
+    ):
+        print("   ✅ Sent!")
+    time.sleep(0.5)
     
     # Test position closed (profit)
     print("4. Sending position closed (profit) notification...")
-    notifier.send_position_closed(
+    if notifier.send_position_closed(
         pair="BTC_USDT",
         reason="TAKE_PROFIT",
         entry_price=45000.00,
@@ -403,17 +402,20 @@ if __name__ == '__main__':
         pnl_usdt=2.70,
         pnl_pct=3.0,
         duration="4h 32m"
-    )
+    ):
+        print("   ✅ Sent!")
+    time.sleep(0.5)
     
     # Test daily summary
     print("5. Sending daily summary...")
-    notifier.send_daily_summary(
+    if notifier.send_daily_summary(
         trades_today=5,
         wins=3,
         losses=2,
         total_pnl=12.35,
         win_rate=60.0,
         open_positions=2
-    )
+    ):
+        print("   ✅ Sent!")
     
     print("\n✅ All test notifications sent! Check your Telegram.")
