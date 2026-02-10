@@ -3,6 +3,16 @@ import pandas as pd
 import numpy as np
 import talib
 import json
+import logging
+
+# Setup logging
+logger = logging.getLogger('Indicators')
+if not logger.handlers:
+    handler = logging.StreamHandler()
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+    logger.addHandler(handler)
+    logger.setLevel(logging.WARNING)
 
 def klines_to_dataframe(klines: list) -> pd.DataFrame:
     """Convert klines list to pandas DataFrame"""
@@ -12,57 +22,121 @@ def klines_to_dataframe(klines: list) -> pd.DataFrame:
     return df
 
 def calc_all_indicators(klines: list, config_path: str = 'credentials/pionex.json') -> dict:
-    """Calculate all technical indicators using TA-Lib"""
+    """Calculate all technical indicators using TA-Lib
+    
+    Args:
+        klines: List of kline dicts with OHLCV data
+        config_path: Path to config file with indicator params
+        
+    Returns:
+        Dict of calculated indicators
+        
+    Raises:
+        ValueError: If insufficient data or calculation fails
+    """
     
     # Load indicator parameters
-    with open(config_path, 'r') as f:
-        config = json.load(f)
-    params = config['indicator_params']
+    try:
+        with open(config_path, 'r') as f:
+            config = json.load(f)
+        params = config['indicator_params']
+    except Exception as e:
+        raise ValueError(f"Failed to load config: {e}")
     
-    df = klines_to_dataframe(klines)
+    # Check minimum data requirements
+    # MACD slow period (26) + signal period (9) = 35 minimum
+    min_candles = max(params['macd_slow'] + params['macd_signal'], params['ema_slow'], 50)
+    if len(klines) < min_candles:
+        raise ValueError(f"Insufficient data: {len(klines)} candles, need {min_candles}+")
+    
+    try:
+        df = klines_to_dataframe(klines)
+    except Exception as e:
+        raise ValueError(f"Failed to convert klines to dataframe: {e}")
     
     # Convert to numpy arrays for TA-Lib
-    close = df['close'].values
-    high = df['high'].values
-    low = df['low'].values
-    volume = df['volume'].values
+    try:
+        close = df['close'].values.astype(float)
+        high = df['high'].values.astype(float)
+        low = df['low'].values.astype(float)
+        volume = df['volume'].values.astype(float)
+    except Exception as e:
+        raise ValueError(f"Failed to extract OHLCV arrays: {e}")
     
-    # Calculate EMAs
-    ema_fast = talib.EMA(close, timeperiod=params['ema_fast'])
-    ema_slow = talib.EMA(close, timeperiod=params['ema_slow'])
+    # Calculate indicators with error handling
+    try:
+        # Calculate EMAs
+        ema_fast = talib.EMA(close, timeperiod=params['ema_fast'])
+        ema_slow = talib.EMA(close, timeperiod=params['ema_slow'])
+        
+        # Calculate RSI
+        rsi = talib.RSI(close, timeperiod=params['rsi_period'])
+        
+        # Calculate MACD
+        macd, macd_signal, macd_hist = talib.MACD(
+            close,
+            fastperiod=params['macd_fast'],
+            slowperiod=params['macd_slow'],
+            signalperiod=params['macd_signal']
+        )
+        
+        # Calculate ATR
+        atr = talib.ATR(high, low, close, timeperiod=params['atr_period'])
+        
+        # Calculate Volume MA
+        volume_ma = talib.SMA(volume, timeperiod=params['volume_ma_period'])
+        
+    except Exception as e:
+        raise ValueError(f"TA-Lib calculation failed: {e}")
     
-    # Calculate RSI
-    rsi = talib.RSI(close, timeperiod=params['rsi_period'])
+    # Validate results (check for NaN in critical values)
+    def safe_float(arr, idx, name):
+        """Safely extract float from array, checking for NaN"""
+        try:
+            val = float(arr[idx])
+            if np.isnan(val) or np.isinf(val):
+                raise ValueError(f"{name} is NaN/inf")
+            return val
+        except (IndexError, TypeError) as e:
+            raise ValueError(f"Failed to extract {name}: {e}")
     
-    # Calculate MACD
-    macd, macd_signal, macd_hist = talib.MACD(
-        close,
-        fastperiod=params['macd_fast'],
-        slowperiod=params['macd_slow'],
-        signalperiod=params['macd_signal']
-    )
+    try:
+        # Extract latest values
+        price = safe_float(close, -1, 'price')
+        ema_fast_val = safe_float(ema_fast, -1, 'ema_fast')
+        ema_slow_val = safe_float(ema_slow, -1, 'ema_slow')
+        rsi_val = safe_float(rsi, -1, 'rsi')
+        rsi_prev_val = safe_float(rsi, -2, 'rsi_prev')
+        macd_val = safe_float(macd, -1, 'macd')
+        macd_signal_val = safe_float(macd_signal, -1, 'macd_signal')
+        macd_hist_val = safe_float(macd_hist, -1, 'macd_hist')
+        atr_val = safe_float(atr, -1, 'atr')
+        volume_val = safe_float(volume, -1, 'volume')
+        volume_ma_val = safe_float(volume_ma, -1, 'volume_ma')
+        
+        # Calculate volume ratio (protect against division by zero)
+        if volume_ma_val > 0:
+            volume_ratio = volume_val / volume_ma_val
+        else:
+            volume_ratio = 1.0
+            
+    except ValueError as e:
+        raise ValueError(f"Indicator validation failed: {e}")
     
-    # Calculate ATR
-    atr = talib.ATR(high, low, close, timeperiod=params['atr_period'])
-    
-    # Calculate Volume MA
-    volume_ma = talib.SMA(volume, timeperiod=params['volume_ma_period'])
-    volume_ratio = volume[-1] / volume_ma[-1] if volume_ma[-1] != 0 else 1.0
-    
-    # Get latest and previous values
+    # Return validated indicators
     return {
-        'price': float(close[-1]),
-        'ema_fast': float(ema_fast[-1]),
-        'ema_slow': float(ema_slow[-1]),
-        'rsi': float(rsi[-1]),
-        'rsi_prev': float(rsi[-2]),
-        'macd': float(macd[-1]),
-        'macd_signal': float(macd_signal[-1]),
-        'macd_hist': float(macd_hist[-1]),
-        'atr': float(atr[-1]),
-        'volume': float(volume[-1]),
-        'volume_ma': float(volume_ma[-1]),
-        'volume_ratio': float(volume_ratio),
+        'price': price,
+        'ema_fast': ema_fast_val,
+        'ema_slow': ema_slow_val,
+        'rsi': rsi_val,
+        'rsi_prev': rsi_prev_val,
+        'macd': macd_val,
+        'macd_signal': macd_signal_val,
+        'macd_hist': macd_hist_val,
+        'atr': atr_val,
+        'volume': volume_val,
+        'volume_ma': volume_ma_val,
+        'volume_ratio': volume_ratio,
         'timestamp': str(df.index[-1])
     }
 
