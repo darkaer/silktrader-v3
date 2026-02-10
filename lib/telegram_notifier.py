@@ -161,9 +161,11 @@ class TelegramNotifier:
         if pnl_usdt > 0:
             icon = "💰"
             status = "PROFIT"
+            pnl_sign = "+"
         else:
             icon = "🔴"
             status = "LOSS"
+            pnl_sign = ""
         
         message = f"""{icon} *POSITION CLOSED - {status}*
 
@@ -174,7 +176,7 @@ class TelegramNotifier:
 *Exit:* ${exit_price:.8f}
 *Quantity:* {quantity:.6f}
 
-*P&L:* ${pnl_usdt:+.2f} ({pnl_pct:+.2f}%)
+*P&L:* ${pnl_sign}{abs(pnl_usdt):.2f} ({pnl_sign}{abs(pnl_pct):.2f}%)
         """
         
         if duration:
@@ -251,6 +253,7 @@ class TelegramNotifier:
             Success status
         """
         pnl_icon = "💰" if total_pnl > 0 else "🔴" if total_pnl < 0 else "⚪"
+        pnl_sign = "+" if total_pnl >= 0 else ""
         
         message = f"""📊 *DAILY SUMMARY*
 
@@ -258,7 +261,7 @@ class TelegramNotifier:
 *Wins:* {wins} | *Losses:* {losses}
 *Win Rate:* {win_rate:.1f}%
 
-{pnl_icon} *Total P&L:* ${total_pnl:+.2f}
+{pnl_icon} *Total P&L:* ${pnl_sign}{abs(total_pnl):.2f}
 
 *Open Positions:* {open_positions}
 
