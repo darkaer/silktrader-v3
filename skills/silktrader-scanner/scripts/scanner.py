@@ -39,7 +39,7 @@ class MarketScanner:
             self.config = json.load(f)
         
         # Get timeframe from config
-        self.timeframe = self.config.get('scanner_config', {}).get('timeframe', '15m')
+        self.timeframe = self.config.get('scanner_config', {}).get('timeframe', '15M')
         
         # Setup logging
         self.logger = logging.getLogger('MarketScanner')
@@ -74,8 +74,8 @@ class MarketScanner:
         
         Args:
             pair: Trading pair (e.g., 'BTC_USDT')
-            interval: Timeframe ('1m', '5m', '15m', '1h', '4h', '1d') - uses self.timeframe if None
-            limit: Number of candles to fetch (max 1000)
+            interval: Timeframe ('1M', '5M', '15M', '30M', '60M', '4H', '8H', '12H', '1D') - uses self.timeframe if None
+            limit: Number of candles to fetch (max 500)
             
         Returns:
             List of kline dicts or empty list on error
@@ -156,20 +156,7 @@ class MarketScanner:
             check_affordability: Filter by account affordability
             
         Returns:
-            List of opportunity dicts sorted by score (highest first):
-            [
-                {
-                    'pair': 'BTC_USDT',
-                    'score': 85,
-                    'confidence': 85,  # Alias for compatibility
-                    'entry_price': 70000.0,
-                    'indicators': {...},
-                    'reasoning': 'Strong uptrend | RSI neutral...',
-                    'affordable': True,
-                    'timestamp': '2026-02-09 20:45:00'
-                },
-                ...
-            ]
+            List of opportunity dicts sorted by score (highest first)
         """
         self.logger.info(f"Starting market scan (top_n={top_n}, min_score={min_score})")
         start_time = time.time()
@@ -186,28 +173,54 @@ class MarketScanner:
         scanned = 0
         errors = 0
         
+        # Track filtering reasons
+        filter_stats = {
+            'no_klines': 0,
+            'insufficient_data': 0,
+            'indicator_error': 0,
+            'low_score': 0,
+            'not_affordable': 0
+        }
+        
         # Get balance once for affordability checks
         balance = 0.0
         if check_affordability and self.exchange_manager:
             balance = self.exchange_manager.get_available_balance()
+            self.logger.info(f"Available balance for affordability checks: ${balance:.2f}")
         
         for i, pair in enumerate(pairs, 1):
             try:
                 # Fetch klines using configured timeframe
                 klines = self.fetch_klines(pair, limit=100)
                 
+                if not klines:
+                    filter_stats['no_klines'] += 1
+                    continue
+                
                 if len(klines) < 50:
                     # Not enough data
+                    filter_stats['insufficient_data'] += 1
+                    self.logger.debug(f"{pair}: Only {len(klines)} candles, need 50+")
                     continue
                 
                 # Calculate indicators
-                indicators = calc_all_indicators(klines)
+                try:
+                    indicators = calc_all_indicators(klines)
+                except Exception as ind_err:
+                    filter_stats['indicator_error'] += 1
+                    self.logger.debug(f"{pair}: Indicator calculation failed: {ind_err}")
+                    continue
                 
                 # Score opportunity
                 score, reasoning = self.score_opportunity(pair, indicators)
                 
+                # Log score for debugging (even if filtered)
+                if i <= 10 or score >= min_score:
+                    self.logger.debug(f"{pair}: Score {score}/100 - {reasoning[:50]}")
+                
                 # Filter by minimum score
                 if score < min_score:
+                    filter_stats['low_score'] += 1
                     continue
                 
                 # Check affordability
@@ -220,7 +233,8 @@ class MarketScanner:
                     )
                     
                     if not affordable:
-                        self.logger.debug(f"{pair} not affordable at ${indicators['price']:.4f}")
+                        filter_stats['not_affordable'] += 1
+                        self.logger.debug(f"{pair}: Not affordable at ${indicators['price']:.6f} with ${balance:.2f} balance")
                         continue
                 
                 # Create opportunity dict
@@ -237,6 +251,8 @@ class MarketScanner:
                 
                 opportunities.append(opportunity)
                 scanned += 1
+                
+                self.logger.info(f"✅ {pair}: Score {score}/100 - {reasoning[:50]}")
                 
                 # Log progress every 50 pairs
                 if i % 50 == 0:
@@ -259,12 +275,22 @@ class MarketScanner:
         # Calculate stats
         elapsed = time.time() - start_time
         
+        # Log detailed filtering stats
         self.logger.info(
             f"Scan complete: {scanned}/{len(pairs)} pairs analyzed, "
             f"{len(opportunities)} passed filters, "
             f"returning top {len(top_opportunities)}, "
             f"{errors} errors, "
             f"took {elapsed:.1f}s"
+        )
+        
+        self.logger.info(
+            f"Filter breakdown: "
+            f"no_klines={filter_stats['no_klines']}, "
+            f"insufficient_data={filter_stats['insufficient_data']}, "
+            f"indicator_error={filter_stats['indicator_error']}, "
+            f"low_score={filter_stats['low_score']}, "
+            f"not_affordable={filter_stats['not_affordable']}"
         )
         
         return top_opportunities
