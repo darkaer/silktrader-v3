@@ -664,6 +664,46 @@ class TradingDatabase:
         conn.commit()
         return cursor.lastrowid
     
+    def get_position_snapshots(self, trade_id: Optional[str] = None,
+                              pair: Optional[str] = None,
+                              start_time: Optional[str] = None,
+                              limit: int = 100) -> List[Dict]:
+        """Query position snapshots
+        
+        Args:
+            trade_id: Filter by specific trade ID
+            pair: Filter by trading pair
+            start_time: Filter snapshots after this time (ISO format)
+            limit: Max number of snapshots to return
+            
+        Returns:
+            List of snapshot dicts ordered by most recent first
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        query = "SELECT * FROM position_snapshots WHERE 1=1"
+        params = []
+        
+        if trade_id:
+            query += " AND trade_id = ?"
+            params.append(trade_id)
+        
+        if pair:
+            query += " AND pair = ?"
+            params.append(pair)
+        
+        if start_time:
+            query += " AND snapshot_time >= ?"
+            params.append(start_time)
+        
+        query += " ORDER BY snapshot_time DESC LIMIT ?"
+        params.append(limit)
+        
+        cursor.execute(query, params)
+        
+        return [dict(row) for row in cursor.fetchall()]
+    
     def get_position_history(self, trade_id: str) -> List[Dict]:
         """Get position snapshot history for a trade
         
@@ -784,6 +824,26 @@ class TradingDatabase:
         return [dict(row) for row in cursor.fetchall()]
     
     # ==================== UTILITY METHODS ====================
+    
+    def execute_query(self, query: str, params: Optional[Tuple] = None) -> List[Dict]:
+        """Execute raw SQL query (for advanced usage)
+        
+        Args:
+            query: SQL query string
+            params: Optional tuple of parameters
+            
+        Returns:
+            List of result dicts
+        """
+        conn = self._get_connection()
+        cursor = conn.cursor()
+        
+        if params:
+            cursor.execute(query, params)
+        else:
+            cursor.execute(query)
+        
+        return [dict(row) for row in cursor.fetchall()]
     
     def backup_database(self, backup_path: str):
         """Create a backup of the database
