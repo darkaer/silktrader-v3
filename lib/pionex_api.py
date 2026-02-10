@@ -147,7 +147,7 @@ class PionexAPI:
         sorted_params = sorted(params.items())
         query = '&'.join([f"{k}={v}" for k, v in sorted_params])
         
-        # FIXED: Use compact JSON format (no spaces) for consistent signature generation
+        # Serialize JSON body for signature (compact format, no spaces)
         body = json.dumps(data, separators=(',', ':')) if data else ''
         
         signature = self._generate_signature(method, endpoint, query, body)
@@ -162,11 +162,13 @@ class PionexAPI:
         
         for attempt in range(max_retries):
             try:
+                # FIXED: Send the exact body string used for signature calculation
+                # instead of letting requests re-serialize it with different formatting
                 response = self.session.request(
                     method=method,
                     url=url,
                     params=params,
-                    json=data,
+                    data=body if body else None,  # Send pre-serialized JSON string
                     headers=headers,
                     timeout=10
                 )
