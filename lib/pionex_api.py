@@ -350,14 +350,32 @@ class PionexAPI:
         return {}
     
     def get_open_orders(self, symbol: Optional[str] = None) -> List[Dict]:
+        """Get open orders for account or specific symbol
+        
+        Returns:
+            List of open order dicts. Empty list if no orders.
+        """
         params = {}
         if symbol:
             params['symbol'] = symbol
         result = self._request('GET', '/api/v1/trade/openOrders', params=params)
         
-        orders = result.get('data', [])
+        # Handle both response formats
+        data = result.get('data', [])
+        
+        # If data is a dict with 'orders' key, extract the orders array
+        if isinstance(data, dict) and 'orders' in data:
+            orders = data['orders']
+        # If data is already a list, use it directly
+        elif isinstance(data, list):
+            orders = data
+        else:
+            orders = []
+        
+        # Log accurate count
         if orders:
-            self.logger.info(f"Found {len(orders)} open orders" + (f" for {symbol}" if symbol else ""))
+            self.logger.info(f"Found {len(orders)} open order(s)" + (f" for {symbol}" if symbol else ""))
+        
         return orders
     
     def get_order_history(self, symbol: Optional[str] = None, limit: int = 100, 
