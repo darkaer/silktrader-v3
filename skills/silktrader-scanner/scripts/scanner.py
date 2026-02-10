@@ -5,6 +5,7 @@ Scans all USDT pairs on Pionex and scores trading opportunities
 """
 import sys
 import time
+import json
 import logging
 from typing import List, Dict, Tuple
 from datetime import datetime
@@ -22,15 +23,23 @@ from risk_manager import RiskManager
 class MarketScanner:
     """Scans crypto markets for high-probability trading setups"""
     
-    def __init__(self, api: PionexAPI, exchange_manager: ExchangeManager = None):
+    def __init__(self, api: PionexAPI, exchange_manager: ExchangeManager = None, config_path: str = 'credentials/pionex.json'):
         """Initialize market scanner
         
         Args:
             api: Initialized PionexAPI client
             exchange_manager: Optional ExchangeManager for affordability checks
+            config_path: Path to config file (for timeframe setting)
         """
         self.api = api
         self.exchange_manager = exchange_manager
+        
+        # Load config for scanner settings
+        with open(config_path, 'r') as f:
+            self.config = json.load(f)
+        
+        # Get timeframe from config
+        self.timeframe = self.config.get('scanner_config', {}).get('timeframe', '15m')
         
         # Setup logging
         self.logger = logging.getLogger('MarketScanner')
@@ -41,7 +50,7 @@ class MarketScanner:
             self.logger.addHandler(handler)
             self.logger.setLevel(logging.INFO)
         
-        self.logger.info("MarketScanner initialized")
+        self.logger.info(f"MarketScanner initialized (timeframe={self.timeframe})")
     
     def get_usdt_pairs(self) -> List[str]:
         """Get all tradeable USDT pairs from Pionex
@@ -60,17 +69,20 @@ class MarketScanner:
             self.logger.error(f"Failed to get USDT pairs: {e}")
             return []
     
-    def fetch_klines(self, pair: str, interval: str = '1h', limit: int = 100) -> List[Dict]:
+    def fetch_klines(self, pair: str, interval: str = None, limit: int = 100) -> List[Dict]:
         """Fetch kline data for a pair
         
         Args:
             pair: Trading pair (e.g., 'BTC_USDT')
-            interval: Timeframe ('1m', '5m', '15m', '1h', '4h', '1d')
+            interval: Timeframe ('1m', '5m', '15m', '1h', '4h', '1d') - uses self.timeframe if None
             limit: Number of candles to fetch (max 1000)
             
         Returns:
             List of kline dicts or empty list on error
         """
+        if interval is None:
+            interval = self.timeframe
+            
         try:
             klines = self.api.get_klines(pair, interval, limit)
             return klines
@@ -181,8 +193,8 @@ class MarketScanner:
         
         for i, pair in enumerate(pairs, 1):
             try:
-                # Fetch klines
-                klines = self.fetch_klines(pair, interval='15M', limit=100)
+                # Fetch klines using configured timeframe
+                klines = self.fetch_klines(pair, limit=100)
                 
                 if len(klines) < 50:
                     # Not enough data
