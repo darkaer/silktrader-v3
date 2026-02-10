@@ -1,9 +1,26 @@
 #!/usr/bin/env python3
 import pandas as pd
 import numpy as np
-import talib
 import json
 import logging
+import sys
+
+# Check if TA-Lib is installed
+try:
+    import talib
+except ImportError:
+    print("\n" + "="*70)
+    print("❌ ERROR: TA-Lib is not installed!")
+    print("="*70)
+    print("SilkTrader requires TA-Lib for technical analysis.\n")
+    print("Installation instructions for Arch Linux:")
+    print("  1. Install C library:")
+    print("     sudo pacman -S ta-lib")
+    print("  2. Install Python wrapper:")
+    print("     pip install TA-Lib")
+    print("\nFor other systems, see: https://github.com/TA-Lib/ta-lib-python")
+    print("="*70 + "\n")
+    sys.exit(1)
 
 # Setup logging
 logger = logging.getLogger('Indicators')
@@ -13,6 +30,8 @@ if not logger.handlers:
     handler.setFormatter(formatter)
     logger.addHandler(handler)
     logger.setLevel(logging.WARNING)
+
+logger.info(f"TA-Lib loaded successfully (version {talib.__version__})")
 
 def klines_to_dataframe(klines: list) -> pd.DataFrame:
     """Convert klines list to pandas DataFrame"""
