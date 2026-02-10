@@ -127,12 +127,12 @@ class TelegramNotifier:
 
 *Pair:* `{pair}`
 *Side:* {side}
-*Entry:* ${entry_price:.8f}
+*Entry:* {entry_price:.8f} USDT
 *Quantity:* {quantity:.6f}
-*Size:* ${position_usdt:.2f}
+*Size:* {position_usdt:.2f} USDT
 
-*Stop Loss:* ${stop_loss:.8f}
-*Take Profit:* ${take_profit:.8f}
+*Stop Loss:* {stop_loss:.8f} USDT
+*Take Profit:* {take_profit:.8f} USDT
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         """
@@ -161,19 +161,19 @@ class TelegramNotifier:
         if pnl_usdt >= 0:
             icon = "💰"
             status = "PROFIT"
-            pnl_str = f"+${pnl_usdt:.2f} (+{pnl_pct:.2f}%)"
+            pnl_str = f"+{pnl_usdt:.2f} USDT | +{pnl_pct:.2f}%"
         else:
             icon = "🔴"
             status = "LOSS"
-            pnl_str = f"-${abs(pnl_usdt):.2f} (-{abs(pnl_pct):.2f}%)"
+            pnl_str = f"{pnl_usdt:.2f} USDT | {pnl_pct:.2f}%"
         
         message = f"""{icon} *POSITION CLOSED - {status}*
 
 *Pair:* `{pair}`
 *Reason:* {reason}
 
-*Entry:* ${entry_price:.8f}
-*Exit:* ${exit_price:.8f}
+*Entry:* {entry_price:.8f} USDT
+*Exit:* {exit_price:.8f} USDT
 *Quantity:* {quantity:.6f}
 
 *P&L:* {pnl_str}
@@ -202,8 +202,8 @@ class TelegramNotifier:
         message = f"""🎯 *TRAILING STOP ACTIVATED*
 
 *Pair:* `{pair}`
-*Current Price:* ${current_price:.8f}
-*New Stop:* ${new_stop:.8f}
+*Current Price:* {current_price:.8f} USDT
+*New Stop:* {new_stop:.8f} USDT
 *Profit:* +{profit_pct:.2f}%
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -227,8 +227,8 @@ class TelegramNotifier:
         message = f"""📈 *TRAILING STOP MOVED*
 
 *Pair:* `{pair}`
-*Old Stop:* ${old_stop:.8f}
-*New Stop:* ${new_stop:.8f}
+*Old Stop:* {old_stop:.8f} USDT
+*New Stop:* {new_stop:.8f} USDT
 *Profit:* +{profit_pct:.2f}%
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
@@ -254,10 +254,10 @@ class TelegramNotifier:
         """
         if total_pnl >= 0:
             pnl_icon = "💰"
-            pnl_str = f"+${total_pnl:.2f}"
+            pnl_str = f"+{total_pnl:.2f} USDT"
         else:
             pnl_icon = "🔴"
-            pnl_str = f"-${abs(total_pnl):.2f}"
+            pnl_str = f"{total_pnl:.2f} USDT"
         
         message = f"""📊 *DAILY SUMMARY*
 
