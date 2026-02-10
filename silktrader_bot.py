@@ -46,13 +46,16 @@ class SilkTraderBot:
         self.exchange = ExchangeManager(self.api, self.risk_mgr, dry_run=dry_run)
         self.scanner = MarketScanner(self.api, self.exchange)
         
-        # Initialize LLM decision engine
+        # Initialize LLM decision engine with API key from config or env
+        openrouter_key = self.config.get('openrouter_api_key', None)
+        
         try:
-            self.llm = LLMDecisionEngine()
+            self.llm = LLMDecisionEngine(api_key=openrouter_key)
             # Check if API key is configured
             if not self.llm.api_key:
                 print("⚠️  Warning: No OpenRouter API key found")
-                print("   Set OPENROUTER_API_KEY environment variable to enable LLM mode")
+                print("   Add 'openrouter_api_key' to credentials/pionex.json")
+                print("   OR set OPENROUTER_API_KEY environment variable")
                 print("   Continuing in SCANNER-ONLY mode (score-based decisions)\n")
                 self.llm_enabled = False
             else:
@@ -97,7 +100,7 @@ class SilkTraderBot:
         print(f"Started: {self.session_start.strftime('%Y-%m-%d %H:%M:%S')}")
         
         if self.llm_enabled:
-            print(f"Decision Engine: ✅ LLM-Powered (OpenRouter)")
+            print(f"Decision Engine: ✅ LLM-Powered (Arcee AI Trinity - FREE)")
         else:
             print(f"Decision Engine: 📊 Scanner-Only Mode (Score-Based)")
         
@@ -475,8 +478,9 @@ Examples:
 NOTE: Always test thoroughly in paper trading mode before going live!
 
 LLM Mode:
-  Set OPENROUTER_API_KEY environment variable to enable LLM-powered decisions.
-  Without it, bot uses scanner scores only (score-based mode).
+  Add "openrouter_api_key": "sk-or-v1-..." to credentials/pionex.json
+  OR set OPENROUTER_API_KEY environment variable
+  Uses FREE Arcee AI Trinity model - get key at https://openrouter.ai/keys
         """
     )
     
