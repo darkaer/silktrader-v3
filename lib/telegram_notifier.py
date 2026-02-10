@@ -62,12 +62,12 @@ class TelegramNotifier:
             self.logger.error(f"Failed to initialize Telegram bot: {e}")
             self.enabled = False
     
-    def _send_message(self, message: str, parse_mode: str = 'Markdown') -> bool:
+    def _send_message(self, message: str, parse_mode: str = 'HTML') -> bool:
         """Send message via Telegram Bot API
         
         Args:
             message: Message text
-            parse_mode: 'Markdown' or 'HTML'
+            parse_mode: 'HTML' or 'Markdown'
             
         Returns:
             Success status
@@ -123,16 +123,16 @@ class TelegramNotifier:
         """
         icon = "🟢" if side == "BUY" else "🔴"
         
-        message = f"""{icon} *NEW POSITION OPENED*
+        message = f"""{icon} <b>NEW POSITION OPENED</b>
 
-*Pair:* `{pair}`
-*Side:* {side}
-*Entry:* {entry_price:.8f} USDT
-*Quantity:* {quantity:.6f}
-*Size:* {position_usdt:.2f} USDT
+<b>Pair:</b> <code>{pair}</code>
+<b>Side:</b> {side}
+<b>Entry:</b> {entry_price:.8f} USDT
+<b>Quantity:</b> {quantity:.6f}
+<b>Size:</b> {position_usdt:.2f} USDT
 
-*Stop Loss:* {stop_loss:.8f} USDT
-*Take Profit:* {take_profit:.8f} USDT
+<b>Stop Loss:</b> {stop_loss:.8f} USDT
+<b>Take Profit:</b> {take_profit:.8f} USDT
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         """
@@ -161,26 +161,26 @@ class TelegramNotifier:
         if pnl_usdt >= 0:
             icon = "💰"
             status = "PROFIT"
-            pnl_str = f"+{pnl_usdt:.2f} USDT | +{pnl_pct:.2f}%"
+            pnl_str = f"+{pnl_usdt:.2f} USDT (+{pnl_pct:.2f}%)"
         else:
             icon = "🔴"
             status = "LOSS"
-            pnl_str = f"{pnl_usdt:.2f} USDT | {pnl_pct:.2f}%"
+            pnl_str = f"{pnl_usdt:.2f} USDT ({pnl_pct:.2f}%)"
         
-        message = f"""{icon} *POSITION CLOSED - {status}*
+        message = f"""{icon} <b>POSITION CLOSED - {status}</b>
 
-*Pair:* `{pair}`
-*Reason:* {reason}
+<b>Pair:</b> <code>{pair}</code>
+<b>Reason:</b> {reason}
 
-*Entry:* {entry_price:.8f} USDT
-*Exit:* {exit_price:.8f} USDT
-*Quantity:* {quantity:.6f}
+<b>Entry:</b> {entry_price:.8f} USDT
+<b>Exit:</b> {exit_price:.8f} USDT
+<b>Quantity:</b> {quantity:.6f}
 
-*P&L:* {pnl_str}
+<b>P&L:</b> {pnl_str}
         """
         
         if duration:
-            message += f"\n*Duration:* {duration}"
+            message += f"\n<b>Duration:</b> {duration}"
         
         message += f"\n\n⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
         
@@ -199,12 +199,12 @@ class TelegramNotifier:
         Returns:
             Success status
         """
-        message = f"""🎯 *TRAILING STOP ACTIVATED*
+        message = f"""🎯 <b>TRAILING STOP ACTIVATED</b>
 
-*Pair:* `{pair}`
-*Current Price:* {current_price:.8f} USDT
-*New Stop:* {new_stop:.8f} USDT
-*Profit:* +{profit_pct:.2f}%
+<b>Pair:</b> <code>{pair}</code>
+<b>Current Price:</b> {current_price:.8f} USDT
+<b>New Stop:</b> {new_stop:.8f} USDT
+<b>Profit:</b> +{profit_pct:.2f}%
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         """
@@ -224,12 +224,12 @@ class TelegramNotifier:
         Returns:
             Success status
         """
-        message = f"""📈 *TRAILING STOP MOVED*
+        message = f"""📈 <b>TRAILING STOP MOVED</b>
 
-*Pair:* `{pair}`
-*Old Stop:* {old_stop:.8f} USDT
-*New Stop:* {new_stop:.8f} USDT
-*Profit:* +{profit_pct:.2f}%
+<b>Pair:</b> <code>{pair}</code>
+<b>Old Stop:</b> {old_stop:.8f} USDT
+<b>New Stop:</b> {new_stop:.8f} USDT
+<b>Profit:</b> +{profit_pct:.2f}%
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         """
@@ -259,15 +259,15 @@ class TelegramNotifier:
             pnl_icon = "🔴"
             pnl_str = f"{total_pnl:.2f} USDT"
         
-        message = f"""📊 *DAILY SUMMARY*
+        message = f"""📊 <b>DAILY SUMMARY</b>
 
-*Trades Closed:* {trades_today}
-*Wins:* {wins} | *Losses:* {losses}
-*Win Rate:* {win_rate:.1f}%
+<b>Trades Closed:</b> {trades_today}
+<b>Wins:</b> {wins} | <b>Losses:</b> {losses}
+<b>Win Rate:</b> {win_rate:.1f}%
 
-{pnl_icon} *Total P&L:* {pnl_str}
+{pnl_icon} <b>Total P&L:</b> {pnl_str}
 
-*Open Positions:* {open_positions}
+<b>Open Positions:</b> {open_positions}
 
 📅 {datetime.now().strftime('%Y-%m-%d')}
         """
@@ -284,10 +284,10 @@ class TelegramNotifier:
         Returns:
             Success status
         """
-        message = f"""⚠️ *ERROR ALERT*
+        message = f"""⚠️ <b>ERROR ALERT</b>
 
-*Type:* {error_type}
-*Details:* {details}
+<b>Type:</b> {error_type}
+<b>Details:</b> {details}
 
 ⏰ {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
         """
@@ -305,10 +305,10 @@ class TelegramNotifier:
         """
         icon = "🔵" if mode == "PAPER TRADING" else "🔴"
         
-        message = f"""{icon} *BOT STARTED*
+        message = f"""{icon} <b>BOT STARTED</b>
 
-*Mode:* {mode}
-*Time:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+<b>Mode:</b> {mode}
+<b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 SilkTrader v3 is now running autonomously.
         """
@@ -324,10 +324,10 @@ SilkTrader v3 is now running autonomously.
         Returns:
             Success status
         """
-        message = f"""⚪ *BOT STOPPED*
+        message = f"""⚪ <b>BOT STOPPED</b>
 
-*Reason:* {reason}
-*Time:* {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+<b>Reason:</b> {reason}
+<b>Time:</b> {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
 
 SilkTrader v3 has been stopped.
         """
@@ -345,7 +345,7 @@ SilkTrader v3 has been stopped.
         Returns:
             Success status
         """
-        message = f"""{icon} *{title}*
+        message = f"""{icon} <b>{title}</b>
 
 {body}
 
