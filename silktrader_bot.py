@@ -35,7 +35,7 @@ class SilkTraderBot:
         
         Args:
             config_path: Path to configuration file
-            dry_run: If True, simulates trades without executing
+            dry_run: If True, simulates trades without executing (can be overridden by config)
         """
         # Store config path for later use
         self.config_path = config_path
@@ -44,7 +44,21 @@ class SilkTraderBot:
         with open(config_path, 'r') as f:
             self.config = json.load(f)
         
-        self.dry_run = dry_run
+        # CRITICAL: Config file takes precedence over command-line parameter
+        # This prevents accidental live trading when paper_trading is enabled in config
+        config_paper_trading = self.config.get('paper_trading', True)
+        
+        if config_paper_trading and not dry_run:
+            print("\n" + "="*70)
+            print("⚠️  CONFIG OVERRIDE: paper_trading=true in config file")
+            print("="*70)
+            print("The config file has 'paper_trading': true")
+            print("This overrides the --live flag for safety.")
+            print("To enable live trading, set 'paper_trading': false in config")
+            print("="*70 + "\n")
+            dry_run = True
+        
+        self.dry_run = config_paper_trading if config_paper_trading else dry_run
         
         # Initialize Telegram notifier
         self.telegram = TelegramNotifier(config_path, enabled=True)
@@ -62,7 +76,7 @@ class SilkTraderBot:
         # Initialize core components
         self.api = PionexAPI(config_path)
         self.risk_mgr = RiskManager(config_path)
-        self.exchange = ExchangeManager(self.api, self.risk_mgr, dry_run=dry_run, db=self.db)
+        self.exchange = ExchangeManager(self.api, self.risk_mgr, dry_run=self.dry_run, db=self.db)
         self.scanner = MarketScanner(self.api, self.exchange, config_path)
         
         # Initialize LLM decision engine with API key from config or env
@@ -106,10 +120,10 @@ class SilkTraderBot:
         
         # Print startup banner
         self._print_banner()
-        self.logger.info(f"Bot started in {'DRY RUN' if dry_run else 'LIVE'} mode")
+        self.logger.info(f"Bot started in {'DRY RUN' if self.dry_run else 'LIVE'} mode")
         
         # Send Telegram bot started notification
-        mode = "PAPER TRADING" if dry_run else "LIVE TRADING"
+        mode = "PAPER TRADING" if self.dry_run else "LIVE TRADING"
         self.telegram.send_bot_started(mode)
     
     def _print_banner(self):
@@ -119,7 +133,13 @@ class SilkTraderBot:
         print(f"\n{'='*70}")
         print(f"🤖 SilkTrader v3 - Autonomous Trading Bot")
         print(f"{'='*70}")
-        print(f"Mode: {'🟢 PAPER TRADING' if self.dry_run else '🔴 LIVE TRADING'}")
+        
+        # VERY CLEAR trading mode indicator
+        if self.dry_run:
+            print(f"Mode: 🟢 PAPER TRADING (Simulated - No Real Money)")
+        else:
+            print(f"Mode: 🔴 LIVE TRADING (REAL MONEY AT RISK!)")
+        
         print(f"Started: {self.session_start.strftime('%Y-%m-%d %H:%M:%S')}")
         
         if self.llm_enabled:
@@ -574,10 +594,11 @@ Examples:
   # Continuous mode, 15 min intervals (paper trading)
   python silktrader_bot.py --interval 900
   
-  # Live trading (REAL MONEY!)
+  # Live trading (REAL MONEY!) - Requires paper_trading: false in config
   python silktrader_bot.py --live --interval 900
 
 NOTE: Always test thoroughly in paper trading mode before going live!
+NOTE: Config file 'paper_trading: true' always blocks real trades for safety.
 
 LLM Mode:
   Add "openrouter_api_key": "sk-or-v1-..." to credentials/pionex.json
@@ -589,7 +610,7 @@ LLM Mode:
     parser.add_argument(
         '--live', 
         action='store_true',
-        help='LIVE TRADING MODE - Executes real trades with real money! (default: paper trading)'
+        help='LIVE TRADING MODE - Executes real trades (requires paper_trading: false in config)'
     )
     parser.add_argument(
         '--interval', 
@@ -610,8 +631,19 @@ LLM Mode:
     
     args = parser.parse_args()
     
+    # Load config to check paper_trading setting
+    try:
+        with open(args.config, 'r') as f:
+            config = json.load(f)
+    except FileNotFoundError:
+        print(f"\n❌ Configuration Error: {args.config} not found")
+        print("   Make sure the config file exists!\n")
+        return
+    
+    config_paper_trading = config.get('paper_trading', True)
+    
     # Safety check for live mode
-    if args.live:
+    if args.live and not config_paper_trading:
         print("\n" + "="*70)
         print("⚠️  WARNING: LIVE TRADING MODE")
         print("="*70)
@@ -629,6 +661,17 @@ LLM Mode:
             print("\n❌ Live trading cancelled\n")
             return
         print()
+    elif args.live and config_paper_trading:
+        print("\n" + "="*70)
+        print("🛡️  CONFIG PROTECTION ACTIVE")
+        print("="*70)
+        print("Your config has 'paper_trading': true")
+        print("This prevents accidental live trading.")
+        print("\nTo enable live trading:")
+        print("  1. Edit credentials/pionex.json")
+        print("  2. Set 'paper_trading': false")
+        print("  3. Run again with --live flag")
+        print("="*70 + "\n")
     
     bot = None
     try:
