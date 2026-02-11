@@ -94,7 +94,7 @@ class BacktestEngine:
             timeframe: Candle timeframe
             
         Returns:
-            List of klines, or empty list if all attempts fail
+            List of klines in chronological order (oldest first), or empty list if all attempts fail
         """
         # Try progressively smaller limits if API rejects request
         limits_to_try = [500, 200, 100]
@@ -103,6 +103,9 @@ class BacktestEngine:
             try:
                 klines = self.api.get_klines(pair, timeframe, limit)
                 if klines and len(klines) > 0:
+                    # Pionex API returns klines in reverse order (newest first)
+                    # Reverse them for chronological backtesting
+                    klines.reverse()
                     return klines
             except Exception as e:
                 # If it's not a limit error, stop trying
@@ -432,7 +435,7 @@ class BacktestEngine:
         for i, pair in enumerate(pairs, 1):
             print(f"   [{i}/{len(pairs)}] {pair}...", end=' ', flush=True)
             
-            # Use fallback method for getting klines
+            # Use fallback method for getting klines (returns in chronological order)
             klines = self._get_klines_with_fallback(pair, self.timeframe)
             
             if len(klines) >= 100:
@@ -457,6 +460,7 @@ class BacktestEngine:
             return {}
         
         # Find common time range across all pairs
+        # Klines are now in chronological order: klines[0] = oldest, klines[-1] = newest
         earliest_time = max(klines[0]['timestamp'] for klines in pair_data.values())
         latest_time = min(klines[-1]['timestamp'] for klines in pair_data.values())
         
