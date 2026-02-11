@@ -16,6 +16,7 @@ sys.path.append('skills/silktrader-trader/scripts')
 from pionex_api import PionexAPI
 from indicators import calc_all_indicators, score_setup
 from risk_manager import RiskManager
+from database import TradingDatabase
 
 
 class BacktestEngine:
@@ -24,7 +25,8 @@ class BacktestEngine:
     def __init__(self, config_path='credentials/pionex.json', 
                  initial_balance=1000.0,
                  trading_fee_percent=0.05,
-                 slippage_percent=0.1):
+                 slippage_percent=0.1,
+                 use_cache=True):
         """Initialize backtest engine
         
         Args:
@@ -32,9 +34,17 @@ class BacktestEngine:
             initial_balance: Starting USDT balance
             trading_fee_percent: Trading fee per trade (Pionex: 0.05%)
             slippage_percent: Average slippage (0.1% realistic)
+            use_cache: Enable database caching for OHLCV data
         """
         self.api = PionexAPI(config_path)
         self.risk_mgr = RiskManager(config_path)
+        self.use_cache = use_cache
+        
+        # Initialize database for caching
+        if use_cache:
+            self.db = TradingDatabase('data/silktrader.db')
+        else:
+            self.db = None
         
         # Load config
         with open(config_path, 'r') as f:
@@ -72,6 +82,10 @@ class BacktestEngine:
         self.peak_balance = initial_balance
         self.max_drawdown = 0.0
         
+        # Cache stats
+        self.cache_hits = 0
+        self.cache_misses = 0
+        
         print(f"\n{'='*70}")
         print(f"🔬 SilkTrader v3 - Backtesting Engine")
         print(f"{'='*70}")
@@ -84,24 +98,69 @@ class BacktestEngine:
         print(f"Take Profit: {self.take_profit_pct}%")
         print(f"Min Scanner Score: {self.min_score}/7")
         print(f"Timeframe: {self.timeframe}")
+        print(f"Database Cache: {'ENABLED' if use_cache else 'DISABLED'}")
         print(f"{'='*70}\n")
     
-    def _get_klines_with_fallback(self, pair: str, timeframe: str) -> List[Dict]:
-        """Get klines with progressive fallback on limit errors
+    def _get_klines_with_cache(self, pair: str, timeframe: str, limit: int = 500) -> List[Dict]:
+        """Get klines with database caching
         
         Args:
             pair: Trading pair
             timeframe: Candle timeframe
+            limit: Number of candles to fetch
+            
+        Returns:
+            List of klines in chronological order (oldest first)
+        """
+        klines = []
+        
+        # Try cache first if enabled
+        if self.use_cache and self.db:
+            cached = self.db.get_candles(pair, timeframe, limit=limit)
+            
+            if cached and len(cached) >= 100:
+                # Check if cache is fresh (less than 1 hour old)
+                newest_candle = max(cached, key=lambda k: k['timestamp'])
+                age_seconds = (datetime.now().timestamp() * 1000 - newest_candle['timestamp']) / 1000
+                
+                # Use cache if data is less than 1 hour old
+                if age_seconds < 3600:
+                    self.cache_hits += 1
+                    # Convert database format to API format and sort chronologically
+                    klines = sorted(cached, key=lambda k: k['timestamp'])
+                    return klines
+        
+        # Cache miss - download from API
+        self.cache_misses += 1
+        klines = self._get_klines_with_fallback(pair, timeframe, limit)
+        
+        # Save to cache if enabled and successful
+        if self.use_cache and self.db and klines:
+            try:
+                inserted = self.db.insert_candles(pair, timeframe, klines)
+            except Exception as e:
+                # Don't fail backtest if caching fails
+                pass
+        
+        return klines
+    
+    def _get_klines_with_fallback(self, pair: str, timeframe: str, limit: int = 500) -> List[Dict]:
+        """Get klines from API with progressive fallback on limit errors
+        
+        Args:
+            pair: Trading pair
+            timeframe: Candle timeframe
+            limit: Desired number of candles
             
         Returns:
             List of klines in chronological order (oldest first), or empty list if all attempts fail
         """
         # Try progressively smaller limits if API rejects request
-        limits_to_try = [500, 200, 100]
+        limits_to_try = [limit, 200, 100] if limit > 200 else [limit, 100]
         
-        for limit in limits_to_try:
+        for try_limit in limits_to_try:
             try:
-                klines = self.api.get_klines(pair, timeframe, limit)
+                klines = self.api.get_klines(pair, timeframe, try_limit)
                 if klines and len(klines) > 0:
                     # Pionex API returns klines in reverse order (newest first)
                     # Reverse them for chronological backtesting
@@ -435,18 +494,26 @@ class BacktestEngine:
         for i, pair in enumerate(pairs, 1):
             print(f"   [{i}/{len(pairs)}] {pair}...", end=' ', flush=True)
             
-            # Use fallback method for getting klines (returns in chronological order)
-            klines = self._get_klines_with_fallback(pair, self.timeframe)
+            # Use cached method for getting klines (returns in chronological order)
+            klines = self._get_klines_with_cache(pair, self.timeframe)
             
             if len(klines) >= 100:
                 pair_data[pair] = klines
-                print(f"✓ {len(klines)} candles")
+                source = "💾" if self.cache_hits > self.cache_misses else "🌐"
+                print(f"{source} {len(klines)} candles")
             else:
                 failed_pairs.append(pair)
                 print(f"⚠️  Insufficient data")
             
-            # Rate limiting
-            time.sleep(0.1)
+            # Rate limiting (only if downloading from API)
+            if self.cache_misses > self.cache_hits:
+                time.sleep(0.1)
+        
+        # Print cache statistics
+        if self.use_cache:
+            total_requests = self.cache_hits + self.cache_misses
+            cache_rate = (self.cache_hits / total_requests * 100) if total_requests > 0 else 0
+            print(f"\n💾 Cache Statistics: {self.cache_hits} hits, {self.cache_misses} misses ({cache_rate:.1f}% hit rate)")
         
         print(f"\n✓ Loaded data for {len(pair_data)} pairs")
         if failed_pairs:
