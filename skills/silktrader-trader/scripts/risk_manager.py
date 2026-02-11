@@ -59,7 +59,7 @@ class RiskManager:
             (position_usdt, quantity, message): Position size, quantity, and formatted message
             
         Raises:
-            ValueError: If inputs are invalid
+            ValueError: If inputs are invalid or minimum order size violates limits
         """
         
         # Input validation
@@ -104,9 +104,23 @@ class RiskManager:
             base_currency = pair.split('_')[0]
             min_qty = self.min_order_sizes.get(pair, 0)
             if min_qty > 0 and quantity < min_qty:
-                # Bump up to minimum quantity
+                # Calculate what the adjusted position would be
+                adjusted_usdt = min_qty * entry_price
+                
+                # CRITICAL SAFETY CHECK: Don't bypass the 25% account limit
+                max_allowed = account_balance * 0.25
+                if adjusted_usdt > max_allowed:
+                    msg = (
+                        f"Cannot trade {pair}: Minimum order size {min_qty} {base_currency} "
+                        f"(${adjusted_usdt:.2f}) exceeds 25% limit (${max_allowed:.2f}) "
+                        f"for account balance ${account_balance:.2f}"
+                    )
+                    self.logger.error(msg)
+                    raise ValueError(msg)
+                
+                # Safe to adjust
                 quantity = min_qty
-                position_usdt = quantity * entry_price
+                position_usdt = adjusted_usdt
                 self.logger.warning(
                     f"Position adjusted to meet minimum order size: "
                     f"{quantity:.6f} {base_currency} (${position_usdt:.2f})"
