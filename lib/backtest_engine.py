@@ -86,6 +86,33 @@ class BacktestEngine:
         print(f"Timeframe: {self.timeframe}")
         print(f"{'='*70}\n")
     
+    def _get_klines_with_fallback(self, pair: str, timeframe: str) -> List[Dict]:
+        """Get klines with progressive fallback on limit errors
+        
+        Args:
+            pair: Trading pair
+            timeframe: Candle timeframe
+            
+        Returns:
+            List of klines, or empty list if all attempts fail
+        """
+        # Try progressively smaller limits if API rejects request
+        limits_to_try = [500, 200, 100]
+        
+        for limit in limits_to_try:
+            try:
+                klines = self.api.get_klines(pair, timeframe, limit)
+                if klines and len(klines) > 0:
+                    return klines
+            except Exception as e:
+                # If it's not a limit error, stop trying
+                error_str = str(e).lower()
+                if 'limit' not in error_str and 'parameter' not in error_str:
+                    break
+                continue
+        
+        return []
+    
     def calculate_position_size(self, entry_price: float, stop_loss: float, 
                                pair: str) -> float:
         """Calculate position size based on risk management
@@ -400,32 +427,33 @@ class BacktestEngine:
         # Download historical data for all pairs
         print("📊 Downloading historical data...")
         pair_data = {}
+        failed_pairs = []
         
         for i, pair in enumerate(pairs, 1):
-            print(f"   [{i}/{len(pairs)}] {pair}...", end=' ')
-            try:
-                # Get maximum history (Pionex typically allows 1000 candles)
-                # For 15M timeframe: 1000 candles = ~10.4 days
-                # Request in chunks if needed
-                klines = self.api.get_klines(pair, self.timeframe, 1000)
-                
-                if len(klines) >= 100:
-                    pair_data[pair] = klines
-                    print(f"✓ {len(klines)} candles")
-                else:
-                    print(f"⚠️  Insufficient data")
-                
-                # Rate limiting
-                time.sleep(0.1)
-                
-            except Exception as e:
-                print(f"❌ {e}")
-                continue
+            print(f"   [{i}/{len(pairs)}] {pair}...", end=' ', flush=True)
+            
+            # Use fallback method for getting klines
+            klines = self._get_klines_with_fallback(pair, self.timeframe)
+            
+            if len(klines) >= 100:
+                pair_data[pair] = klines
+                print(f"✓ {len(klines)} candles")
+            else:
+                failed_pairs.append(pair)
+                print(f"⚠️  Insufficient data")
+            
+            # Rate limiting
+            time.sleep(0.1)
         
-        print(f"\n✓ Loaded data for {len(pair_data)} pairs\n")
+        print(f"\n✓ Loaded data for {len(pair_data)} pairs")
+        if failed_pairs:
+            print(f"⚠️  Failed to load: {', '.join(failed_pairs)}")
+        print()
         
         if not pair_data:
             print("❌ No data available for backtest")
+            print("\n💡 Tip: Try using major pairs instead:")
+            print("   python backtest.py --quick-test 3d --pairs BTC_USDT,ETH_USDT,BNB_USDT,SOL_USDT\n")
             return {}
         
         # Find common time range across all pairs
