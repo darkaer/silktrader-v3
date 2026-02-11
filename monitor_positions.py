@@ -37,9 +37,9 @@ class PositionMonitor:
         # Initialize Telegram notifier
         self.telegram = TelegramNotifier(config_path, enabled=True)
         
-        # Load positions from file or API
+        # Positions file path (will be reloaded on each check)
         self.positions_file = 'data/positions.json'
-        self.positions = self.load_positions()
+        self.positions = []
         
         # Statistics
         self.total_pnl = 0.0
@@ -54,25 +54,34 @@ class PositionMonitor:
         print(f"Database: {'✅ Connected' if db else '⚠️  Not connected'}")
         print(f"Telegram: {'✅ Enabled' if self.telegram.enabled else '⚠️  Disabled'}")
         print(f"Started: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"Open Positions: {len(self.positions)}")
+        print(f"Open Positions: {len(self.load_positions())}")
         print(f"{'='*70}\n")
     
     def load_positions(self):
-        """Load positions from file"""
+        """Load positions from file
+        
+        Returns:
+            List of position dicts
+        """
         if not os.path.exists(self.positions_file):
             return []
         
         try:
             with open(self.positions_file, 'r') as f:
-                return json.load(f)
-        except:
+                positions = json.load(f)
+                return positions if isinstance(positions, list) else []
+        except Exception as e:
+            print(f"⚠️  Error loading positions: {e}")
             return []
     
     def save_positions(self):
         """Save positions to file"""
         os.makedirs('data', exist_ok=True)
-        with open(self.positions_file, 'w') as f:
-            json.dump(self.positions, f, indent=2)
+        try:
+            with open(self.positions_file, 'w') as f:
+                json.dump(self.positions, f, indent=2)
+        except Exception as e:
+            print(f"⚠️  Error saving positions: {e}")
     
     def add_position(self, position):
         """Add new position to monitor
@@ -87,6 +96,8 @@ class PositionMonitor:
         if 'trade_id' not in position:
             position['trade_id'] = position['id']
         
+        # Load current positions, add new one, save
+        self.positions = self.load_positions()
         self.positions.append(position)
         self.save_positions()
         print(f"✅ Added position: {position['pair']} (Trade ID: {position['trade_id']})")
@@ -385,7 +396,7 @@ class PositionMonitor:
         for exit_signal in exits_to_process:
             self.close_position(exit_signal)
         
-        # Save updated positions
+        # Save updated positions (in case trailing stops were modified)
         self.save_positions()
     
     def print_summary(self):
@@ -432,6 +443,10 @@ class PositionMonitor:
         print(f"\n{'─'*70}")
         print(f"🔄 Monitoring cycle at {datetime.now().strftime('%H:%M:%S')}")
         print(f"{'─'*70}\n")
+        
+        # CRITICAL: Reload positions from file before each check
+        # This ensures we see positions added by the bot after monitor started
+        self.positions = self.load_positions()
         
         self.check_all_positions()
         
